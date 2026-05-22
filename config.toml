@@ -38,10 +38,10 @@ ebbinghaus_intervals = [1, 2, 4, 7, 15]
 
 # 掌握度阈值
 [education.mastery]
-mastered = 90         # >= 90 已掌握，降低出题频率
-learning = 60         # 60-89 学习中
-weak = 30             # 30-59 薄弱
-critical = 0          # < 30 严重不足
+mastered = 95         # >= 95 已掌握，降低出题频率
+learning = 70         # 70-94 学习中
+weak = 50             # 50-69 薄弱
+critical = 0          # < 50 严重不足
 
 # 掌握度分变动
 [education.mastery_score]
