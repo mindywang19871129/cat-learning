@@ -24,7 +24,7 @@ fi
 
 echo ""
 echo "========================================="
-echo "  小肥猫学习助手 v2.0 - 生产部署"
+echo "  小肥猫学习助手 v2.1 - 纯云端部署"
 echo "  $(date '+%Y-%m-%d %H:%M:%S')"
 echo "========================================="
 echo ""
@@ -43,23 +43,6 @@ if [ -z "$PYTHON" ]; then
     exit 1
 fi
 ok "Python: $($PYTHON --version 2>&1)"
-
-# ---- 系统依赖 ----
-info "检查 tesseract-ocr..."
-if ! command -v tesseract &> /dev/null; then
-    warn "未安装 tesseract-ocr，正在安装..."
-    if command -v apt-get &> /dev/null; then
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng
-    elif command -v yum &> /dev/null; then
-        sudo yum install -y tesseract tesseract-langpack-chi-sim
-    else
-        warn "无法自动安装 tesseract，请手动安装"
-    fi
-    ok "tesseract 安装完成"
-else
-    ok "tesseract 已安装"
-fi
 
 # ---- 虚拟环境 ----
 VENV_DIR="/opt/venv"

@@ -4,6 +4,4 @@ flask>=3.0.0
 gunicorn>=21.0.0
 apscheduler>=3.10.0
 requests>=2.31.0
-# OCR依赖（可选，降级到DeepSeek Vision也可用）
-pytesseract>=0.3.10
 pillow>=10.0.0
