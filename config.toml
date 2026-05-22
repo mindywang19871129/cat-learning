@@ -64,10 +64,10 @@ chat_ids = ["oc_a232ed8b096918c5ff89fa9149e321fa"]
 interval_seconds = 10
 
 [ocr]
-# OCR引擎: tesseract / deepseek_vision / feishu
-engine = "tesseract"
-# tesseract语言包
-tesseract_lang = "chi_sim+eng"
+# OCR引擎（纯云端，代码自动选择：飞书OCR → ocr.space 降级）
+# 飞书OCR为主力引擎，需在飞书开放平台开通 optical_char_recognition 权限
+# ocr.space 为备用（免费25000次/月），需在 https://ocr.space/ocrapi 注册获取API Key
+# API Key 配置在 .env 文件的 OCR_SPACE_API_KEY 字段
 
 [exam]
 # 模考配置

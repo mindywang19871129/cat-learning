@@ -1,4 +1,4 @@
-# 小肥猫学习助手 v2.0 — 生产部署指南
+# 小肥猫学习助手 v2.1 — 生产部署指南（纯云端）
 
 ---
 
@@ -9,7 +9,6 @@
 | Ubuntu | 20.04 / 22.04 | 推荐 22.04 LTS |
 | Python | 3.10+ | `python3 --version` |
 | Git | 2.x | `git --version` |
-| tesseract-ocr | 4.x+ | OCR 拍照批改（可选） |
 | Nginx | 可选 | 反向代理（如需公网 HTTPS） |
 
 ---
@@ -47,7 +46,6 @@ bash deploy.sh
 `deploy.sh` 会自动完成：
 - 创建 Python 虚拟环境 `/opt/venv`
 - 安装所有 Python 依赖
-- 安装 tesseract-ocr（如缺失）
 - 创建必要的数据目录
 - 配置 systemd 服务实现 24/7 运行
 - 启动服务
@@ -61,7 +59,7 @@ bash deploy.sh
 ```bash
 # 1. 安装系统依赖
 sudo apt-get update
-sudo apt-get install -y python3 python3-pip python3-venv git tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng
+sudo apt-get install -y python3 python3-pip python3-venv git
 
 # 2. 创建虚拟环境
 python3 -m venv /opt/venv
