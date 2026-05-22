@@ -258,6 +258,7 @@ def _recognize_via_feishu(p: Path) -> dict | None:
     API文档：POST /optical_char_recognition/v1/image/basic_recognize
             Body: {"image": "<base64>"}
             返回: {"code":0, "data":{"text_list":["行1","行2"]}}
+    遇到频率限制(99991400)会自动重试最多3次。
     """
     import requests
     token = _get_feishu_token()
@@ -267,33 +268,60 @@ def _recognize_via_feishu(p: Path) -> dict | None:
     try:
         with open(str(p), "rb") as f:
             img_b64 = base64.b64encode(f.read()).decode()
-
-        resp = requests.post(
-            f"{FEISHU_BASE}/optical_char_recognition/v1/image/basic_recognize",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json; charset=utf-8",
-            },
-            json={"image": img_b64},
-            timeout=30,
-        )
-
-        if resp.status_code != 200:
-            return None
-
-        data = resp.json()
-        code = data.get("code", -1)
-        if code != 0:
-            # 9499=权限不足, 1150101=参数错误, 1150102=服务异常
-            return None
-
-        # API 返回字段是 text_list（不是 text_lines）
-        raw_lines = data.get("data", {}).get("text_list", [])
-        if raw_lines:
-            return {"raw_lines": raw_lines}
-        return None
     except Exception:
         return None
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            resp = requests.post(
+                f"{FEISHU_BASE}/optical_char_recognition/v1/image/basic_recognize",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json; charset=utf-8",
+                },
+                json={"image": img_b64},
+                timeout=30,
+            )
+
+            if resp.status_code != 200:
+                # 非200可能是频率限制，也检查body中的code
+                try:
+                    data = resp.json()
+                    code = data.get("code", -1)
+                    if code == 99991400 and attempt < max_retries - 1:
+                        wait = (attempt + 1) * 3  # 3s, 6s, 9s 退避
+                        print(f"[OCR] 飞书频率限制，{wait}s后重试({attempt+1}/{max_retries})...")
+                        time.sleep(wait)
+                        continue
+                except Exception:
+                    pass
+                return None
+
+            data = resp.json()
+            code = data.get("code", -1)
+            if code == 0:
+                # 成功
+                raw_lines = data.get("data", {}).get("text_list", [])
+                if raw_lines:
+                    return {"raw_lines": raw_lines}
+                return None
+            elif code == 99991400 and attempt < max_retries - 1:
+                # 频率限制，退避重试
+                wait = (attempt + 1) * 3
+                print(f"[OCR] 飞书频率限制，{wait}s后重试({attempt+1}/{max_retries})...")
+                time.sleep(wait)
+                continue
+            else:
+                # 9499=权限不足, 1150101=参数错误, 1150102=服务异常 等不可重试错误
+                return None
+        except Exception:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            return None
+
+    return None
 
 
 def _recognize_via_ocrspace(p: Path) -> dict | None:
