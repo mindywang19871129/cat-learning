@@ -1,7 +1,9 @@
-# 🐱 小肥猫学习助手 v2.1 — 项目完整手册
+# 🐱 小肥猫学习助手 v2.2 — 项目完整手册
 
-> 生成日期：2026-05-22 | 工作空间：`/Users/mindy/CodeBuddy/20260521173149/cat-learning`
+> 最后更新：2026-05-22 | 工作空间：`/Users/mindy/CodeBuddy/20260521173149/cat-learning`
 > GitHub: `git@github.com:mindywang19871129/cat-learning.git`
+>
+> **变更记录**：见 Git 提交历史。每次变更同步更新本文档。
 
 ---
 
@@ -80,11 +82,12 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │                    外部 API 依赖                                 │
 │                                                                   │
-│  ┌──────────────────┐  ┌──────────────────┐                      │
-│  │ DeepSeek API      │  │ OCR.space (备用)  │                     │
-│  │ api.deepseek.com  │  │ api.ocr.space    │                     │
-│  │ 需 DEEPSEEK_API_KEY│  │ 需 OCR_SPACE_API_KEY│                  │
-│  └──────────────────┘  └──────────────────┘                      │
+│  ┌──────────────────┐  ┌──────────────────────────┐                      │
+│  │ DeepSeek API      │  │ OCR.space (推荐备用)      │                     │
+│  │ api.deepseek.com  │  │ api.ocr.space            │                     │
+│  │ 需 DEEPSEEK_API_KEY│  │ 需 OCR_SPACE_API_KEY     │                     │
+│  └──────────────────┘  │ 免费 25000次/月 ✨        │                     │
+│                        └──────────────────────────┘                     │
 │                                                                   │
 │  ┌──────────────────┐                                             │
 │  │ Tavily 搜索 (备用) │                                            │
@@ -151,12 +154,14 @@
 | **im:message** | 🟡 读取消息 | 开放平台→权限管理 |
 | **im:message:send_as_bot** | 🟡 发送消息 | 开放平台→权限管理 |
 
-### 3.3 可选 API Token
+### 3.3 可选 API Token（推荐注册，避免单点故障）
 
 | Token | 用途 | 获取方式 | 失效影响 |
 |-------|------|---------|---------|
-| **OCR_SPACE_API_KEY** | 🟢 OCR降级备用 | [ocr.space/ocrapi](https://ocr.space/ocrapi) 免费注册 | 飞书OCR故障时无备用 |
+| **OCR_SPACE_API_KEY** | 🟡 **强烈推荐** OCR降级备用 | [ocr.space/ocrapi](https://ocr.space/ocrapi) 免费注册，**每月25000次**，填邮箱即得Key | 飞书OCR频率限制时无备用（见下方3.7节） |
 | **TAVILY_API_KEY** | 🟢 联网搜索降级 | [tavily.com](https://tavily.com) 注册 | 无法联网搜题（影响小） |
+
+> ⚠️ **重要**：飞书OCR免费额度存在严格频率限制（实测约1次/分钟），频繁调用会触发 `99991400` 错误。代码已内置5次退避重试（10s/20s/30s/40s），但**强烈建议注册 OCR.space 作为稳定降级方案**。详见下方 3.7 节。
 
 ### 3.4 服务器依赖
 
@@ -191,10 +196,21 @@ cat-learning 可用性 =
     AND Python 3.10+
 
 降级路径:
-    飞书OCR失败 → OCR.space (需 OCR_SPACE_API_KEY)
+    飞书OCR频率限制(99991400) → 5次退避重试(10s递增) → 仍失败 → OCR.space (需 OCR_SPACE_API_KEY) → 均失败 → 提示用户
     DeepSeek搜索失败 → Tavily (需 TAVILY_API_KEY)
     事件回调不可用 → 轮询模式 (内网默认)
 ```
+
+### 3.7 OCR 频率限制说明
+
+**飞书 OCR API 免费额度有严格频率限制**，实测约 **1次/分钟**。连续多次调用会返回 `99991400 "request trigger frequency limit"`。
+
+代码处理策略（`core.py` `_recognize_via_feishu`）：
+- 遇到 99991400 → 自动退避重试，最多 **5次**（10s → 20s → 30s → 40s 递增等待）
+- 日志输出到 stderr，不污染 stdout（避免脚本 JSON 解析被干扰）
+- 5次重试全部失败 → 降级到 OCR.space
+
+**长期稳定方案**：注册 OCR.space 免费 API Key（每月25000次，不受飞书频率限制），在 `.env` 中配置 `OCR_SPACE_API_KEY` 即可自动激活双引擎降级。
 
 ---
 
@@ -212,6 +228,8 @@ cat-learning/
 ├── deploy.sh            ← 🟢 一键部署脚本
 ├── cat-learning.service ← 🟢 systemd服务定义
 ├── test.sh              ← 🟢 端到端测试脚本
+├── verify_all.sh        ← 🟢 全链路7步验证（服务/Token/OCR/LLM/轮询/数据）
+├── debug_ocr.sh         ← 🟢 OCR深度诊断（打印飞书API完整返回码）
 ├── DEPLOY.md            ← 🟢 部署指南
 ├── VERIFY.md            ← 🟢 验证指南
 ├── PROJECT_GUIDE.md     ← 🟢 本文档
@@ -445,8 +463,21 @@ journalctl -u cat-learning --no-pager | grep "POLL"
 
 ### 7.3 OCR 识别失败
 
+**快速诊断**（打印飞书API完整返回）：
 ```bash
-# 测试飞书OCR
+bash /opt/cat-learning/debug_ocr.sh
+```
+
+**常见错误码与修复**：
+
+| 错误码 | 含义 | 修复 |
+|--------|------|------|
+| `99991400` | 频率限制 | 等1-2分钟重试；注册 OCR.space 做长期降级 |
+| `9499` | 权限未开通 | 飞书开放平台→权限管理→开通 optical_char_recognition→**发布新版本** |
+| `99991672` | 应用未发布 | 飞书开放平台→点击「发布新版本」 |
+
+**手动测试OCR（含重试）**：
+```bash
 python3 -c "
 import sys, json
 sys.path.insert(0, '/opt/cat-learning')
@@ -458,12 +489,14 @@ img.save('/tmp/test_ocr.png')
 r = json.loads(ocr_image('/tmp/test_ocr.png'))
 print(json.dumps(r, ensure_ascii=False, indent=2))
 "
-# 期望: engine=feishu_ocr, success=true
-
-# 如果失败，检查:
-# 1. 飞书开放平台→权限管理→ optical_char_recognition 是否已开通并发布新版本
-# 2. curl 测试飞书OCR API直连(见下方)
+# 期望: engine=feishu_ocr, success=true（或 engine=ocrspace 降级成功）
 ```
+
+**长期稳定方案**：
+1. 访问 https://ocr.space/ocrapi 注册免费API Key
+2. 在 `/opt/cat-learning/.env` 添加：`OCR_SPACE_API_KEY=你的key`
+3. 重启服务：`systemctl restart cat-learning`
+4. 此后飞书OCR限流时自动降级到 OCR.space（每月25000次免费）
 
 ### 7.4 DeepSeek API 不通
 
