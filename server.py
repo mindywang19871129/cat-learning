@@ -167,21 +167,30 @@ def _handle_feishu_event(event: dict):
 # 定时任务
 # ══════════════════════════════════════════════════════════════════════
 
+def _log(msg: str):
+    """立即写入日志（解决 gunicorn 子线程 stdout 缓冲问题）。"""
+    sys.stdout.write(f"{msg}\n")
+    sys.stdout.flush()
+
+
 def scheduled_daily_push():
     """定时每日推送学习任务：读取数据 → LLM出题 → 直接调用飞书API推送。"""
-    print(f"[SCHEDULER] 执行每日推送: {datetime.now()}")
+    _log(f"[SCHEDULER] 执行每日推送: {datetime.now()}")
     
     # 读轮询配置，获取推送目标
     poll_cfg = CFG.get("feishu", {}).get("poll", {})
     target_chat_ids = poll_cfg.get("chat_ids", [])
     if not target_chat_ids:
-        print("[SCHEDULER] 未配置推送目标 chat_ids，跳过")
+        _log("[SCHEDULER] 未配置推送目标 chat_ids，跳过")
         return
     
     chat_ids_str = json.dumps(target_chat_ids, ensure_ascii=False)
+    _log(f"[SCHEDULER] 推送目标: {chat_ids_str}")
     
     try:
+        _log("[SCHEDULER] 初始化 LLM 会话...")
         session = init_new_session()
+        _log("[SCHEDULER] 开始 LLM 出题流程...")
         result = run(
             "请执行完整的每日出题推送流程。\n\n"
             "═══════════════════════════════════════\n"
@@ -227,10 +236,10 @@ def scheduled_daily_push():
             "⚠️ 重要：send_feishu 的 receive_id 参数就是上面提供的 chat_id（oc_开头），系统会自动识别为聊天ID。",
             session,
         )
-        print(f"[SCHEDULER] 每日推送完成: {result[:300] if result else 'None'}")
+        _log(f"[SCHEDULER] 每日推送完成: {result[:300] if result else 'None'}")
     except Exception as e:
-        print(f"[SCHEDULER] 每日推送失败: {e}")
-        traceback.print_exc()
+        _log(f"[SCHEDULER] 每日推送失败: {e}")
+        _log(traceback.format_exc())
 
 
 def start_scheduler():
