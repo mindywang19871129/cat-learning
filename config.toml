@@ -25,7 +25,7 @@ exam_questions_count = 25      # 模考题数
 
 # 出题时间
 push_time = "09:00"
-friday_3days = true            # 周五推送三天题目
+friday_3days = false           # 已停用：每天正常出题，前一天未批改则跳过
 
 # 课程起始日
 course_start_date = "2026-05-14"

@@ -24,7 +24,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from core import (
     init_new_session, run, download_feishu_image,
     download_feishu_file, extract_text_from_pdf,
-    ocr_image,
+    ocr_image, send_feishu,
     verify_password, DATA_DIR, CFG, HOME as CORE_HOME,
 )
 
@@ -36,6 +36,50 @@ FEISHU_VERIFY_TOKEN = os.environ.get("FEISHU_VERIFICATION_TOKEN", "")
 # ══════════════════════════════════════════════════════════════════════
 # 飞书事件处理
 # ══════════════════════════════════════════════════════════════════════
+
+# ── 发题/新题 触发关键词 ──
+_FATI_KEYWORDS = ["发题", "新题", "做题", "来一套", "再来一套", "发一套", "再发", "做新题", "出题", "推送题目", "今日题目", "每日一练"]
+
+
+def _check_today_questions_completed():
+    """Python层快速检查 today_questions.json 完成状态（不依赖LLM）。
+    返回 (can_generate: bool, reason: str)
+    """
+    today_file = DATA_DIR / "today_questions.json"
+    if not today_file.exists():
+        return True, "今天还没有题目"
+
+    try:
+        data = json.loads(today_file.read_text(encoding="utf-8"))
+    except Exception:
+        return True, "文件读取失败，按无题目处理"
+
+    math = data.get("math", [])
+    english = data.get("english", [])
+    all_q = math + english
+    total = len(all_q)
+
+    if total == 0:
+        return True, "没有题目记录"
+
+    # 已批改 = 有 score 或 batch_id 字段
+    completed = sum(1 for q in all_q if "score" in q or "batch_id" in q)
+    if completed < total:
+        return False, f"还有 {total - completed}/{total} 道题未完成"
+
+    return True, f"全部 {total} 道题已完成"
+
+
+def _is_request_new_questions(text: str) -> bool:
+    """判断消息是否是'发一套新题'意图（非调参）。"""
+    text_lower = text.lower().replace(" ", "")
+    return any(kw in text_lower for kw in _FATI_KEYWORDS)
+
+
+def _is_parent_adjust(text: str) -> bool:
+    """判断消息是否是家长调参意图。"""
+    kw = ["调整", "增加", "减少", "更换教材", "调整年级", "查看报告", "学习报告", "密码"]
+    return any(k in text for k in kw)
 
 def _handle_feishu_event(event: dict):
     """处理单个飞书事件，全部交给 LLM。"""
@@ -149,55 +193,32 @@ def _handle_feishu_event(event: dict):
         )
         print(f"[INFO] 文件处理完成: {result[:100] if result else 'None'}")
     else:
+        # ── Python层快速预检：发题/新题意图 ──
+        # 不依赖LLM做拦截，保证一定有飞书回复
+        if _is_request_new_questions(text) and not _is_parent_adjust(text):
+            can_gen, reason = _check_today_questions_completed()
+            _log(f"[PRE-CHECK] 发题意图检测: can_gen={can_gen}, reason={reason}")
+            if not can_gen:
+                # 题目未完成 → 直接发飞书回复，不走LLM（快速、可靠）
+                reply = f"🐱 {reason}哦～先把今天的题目完成，我会等你！回复时写「第X题答案是...」就可以啦～"
+                send_feishu(receive_id=reply_target, msg_type="text", content=reply)
+                _log(f"[INFO] 发题拦截: {reason} → 已直接回复飞书")
+                return
+            _log(f"[PRE-CHECK] 题目已完成/无题目，交给LLM生成新题")
+
+        session = init_new_session()
         result = run(
             f"[系统上下文：飞书用户 sender_open_id={sender_id}, {target_desc}]\n"
             f"学生发来消息：{text}\n\n"
             f"═══════════════════════════════════════\n"
-            f"请根据消息内容自主判断和处理（严格按以下优先级）：\n"
+            f"请根据消息内容判断处理类型并执行：\n"
             f"═══════════════════════════════════════\n\n"
-            f"【1. 家长调参指令】⚠️ 最高优先级\n"
-            f"触发条件：消息含调参意图关键词（调整难度/提升难度/增加难度/变难/加题/减少题/增加题量/调整题数/增加写作/增加语法/增加词汇/更换教材/调整年级/查看报告/学习报告 等）\n"
-            f"处理流程：\n"
-            f"  a) 从消息全文（任意位置）提取密码：匹配'密码：XXXX'或'家长密码：XXXX'或'密码:XXXX'\n"
-            f"  b) 用 verify_password(密码) 验证\n"
-            f"  c) 密码正确 → 读取 data/adjustments.json，按指令修改：\n"
-            f"     - 难度 → 改 difficulty_bias 为 hard/normal/easy\n"
-            f"     - 题量 → 改 math_daily_count 或 english_daily_count\n"
-            f"     - 题型侧重 → 在 focus_topics 中记录（如 ['写作','语法','词汇']）\n"
-            f"     - 教材/年级 → 更新 textbook/grade，用 web_search 搜知识体系并更新 knowledge_map.json\n"
-            f"     - 改完后保存 adjustments.json，用 send_feishu 回复确认（列出修改项）\n"
-            f"  d) 密码错误 → 用 send_feishu 回复'密码错误，请重试'\n"
-            f"  e) 无密码 → 用 send_feishu 回复'请提供家长密码，格式：家长密码：XXXX'\n\n"
-            f"【2. 手动发题/再做一套】⚠️ 高优先级\n"
-            f"触发条件：消息含 发题/新题/做题/来一套/再来一套/发一套/再发/做新题/出题/推送题目/今日题目/每日一练 等关键词\n"
-            f"处置流程：\n"
-            f"  ⛔ 第一步：必须先检查 data/today_questions.json\n"
-            f"     - 如果文件存在且有题目（math+english不为空），统计各题是否已有批改记录\n"
-            f"     - 如果有未完成的题目（题目存在但没有批改记录/batch_id），说明学生还没做完\n"
-            f"     → 用 send_feishu 回复：\"🐱 你还有X道题没做完哦～先把今天的题目完成，我会等你！回复时写「第X题答案是...」就可以啦～\"\n"
-            f"     → 到此为止，不出新题！\n"
-            f"  ✅ 第二步：只有以下情况才出新题：\n"
-            f"     - today_questions.json 不存在（今天是第一次）\n"
-            f"     - 所有题目都已完成批改（每题都有批改记录）\n"
-            f"     - 或者明确写了结果字典中有score/batch_id等字段\n"
-            f"    满足条件后，按以下流程出题：\n"
-            f"     a) 读取 data/adjustments.json 获取难度/题量/题型侧重设置\n"
-            f"     b) 读取 data/mastery.json → 找到薄弱知识点（score<95优先）\n"
-            f"     c) 读取 data/error_book.json → 检查今天该复习的错题\n"
-            f"     d) 读取 data/knowledge_map.json → 确认知识范围\n"
-            f"     e) 用 call_llm 按以下标准出题：\n"
-            f"        数学：只出提升+拓展难度，复合应用题60%+图形综合30%+思维拓展10%，每题≥2步推理\n"
-            f"        英语KET：写作35%+词汇25%+语法20%+阅读10%+听力口语各5%，写作≥35词\n"
-            f"     f) 存入 data/today_questions.json（格式：{\"date\":\"日期\",\"math\":[],\"english\":[]}）\n"
-            f"     g) 用 send_feishu 发送卡片消息（interactive 卡片，header orange色，标题「🐱 小肥猫今日学习任务」）\n"
-            f"        - 数学用 📐 标识，英语用 📖 标识\n"
-            f"        - 每题单独编号，末尾写「回复时请写第X题答案是...」\n"
-            f"        - 加上🐱鼓励语，语气温暖亲切\n\n"
-            f"【3. 答题/批改】\n"
-            f"如果消息含'第X题答案是'、'答案是'、'选'、题目编号等 → 按批改流程处理\n\n"
-            f"【4. 普通对话/问候】\n"
-            f"以上都不是 → 友好回复\n\n"
-            f"⚠️ 关键铁则：无论哪种情况，处理完后必须调用 send_feishu(receive_id=\"{reply_target}\", msg_type=\"text\", content=\"...\") 发送结果到飞书！禁止只处理不发送！",
+            f"类型A·家长调参（最高优先级）→ 消息含调参关键词+密码，读adjustments.json，用 send_feishu 确认\n"
+            f"类型B·发新题 → 消息含 发题/新题/做题/再来一套 等 → 读adjustments/mastery/error_book/knowledge_map → call_llm出题 → write_file存today_questions.json → send_feishu推送卡片\n"
+            f"  出题标准：数学只出提升+拓展，复合应用60%+图形30%+拓展10%；KET写作35%+词汇25%+语法20%\n"
+            f"类型C·答题批改 → 消息含第X题/答案是 → 读today_questions.json批改 → 更新mastery/error_book → send_feishu回复\n"
+            f"类型D·普通对话 → 友好回复\n\n"
+            f"⚠️ 铁则：无论哪种类型，必须调用 send_feishu(receive_id=\"{reply_target}\", ...) 发送结果！",
             session,
         )
         _log(f"[INFO] 文本处理完成: {result[:300] if result else 'None'}")
@@ -214,8 +235,15 @@ def _log(msg: str):
 
 
 def scheduled_daily_push():
-    """定时每日推送学习任务：读取数据 → LLM出题 → 直接调用飞书API推送。"""
+    """定时每日推送学习任务：先检查前一天是否完成 → 读取数据 → LLM出题 → 推送。"""
     _log(f"[SCHEDULER] 执行每日推送: {datetime.now()}")
+
+    # ── Python层前置检查：前一天的题目是否已完成 ──
+    can_gen, reason = _check_today_questions_completed()
+    _log(f"[SCHEDULER] 题目完成检查: can_gen={can_gen}, reason={reason}")
+    if not can_gen:
+        _log(f"[SCHEDULER] ⛔ 跳过推送: {reason}")
+        return
     
     # 读轮询配置，获取推送目标
     poll_cfg = CFG.get("feishu", {}).get("poll", {})
@@ -275,8 +303,7 @@ def scheduled_daily_push():
             "- 数学区用 📐 标识，英语区用 📖 标识\n"
             "- 每道题单独编号（如「第1题」「第2题」），方便小朋友回复\n"
             "- 末尾明确告诉小朋友：回复时请写「第X题答案是...」，可以拍照也可以打字\n"
-            "- 加上🐱鼓励语，语气温暖亲切\n"
-            "- 如果今天是周五且 adjustments.json 中 friday_3days=true，生成周五+周六+周日3天的题目\n\n"
+            "- 加上🐱鼓励语，语气温暖亲切\n\n"
             "⚠️ 重要：send_feishu 的 receive_id 参数就是上面提供的 chat_id（oc_开头），系统会自动识别为聊天ID。",
             session,
         )
