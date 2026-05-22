@@ -31,7 +31,7 @@ friday_3days = true            # 周五推送三天题目
 course_start_date = "2026-05-14"
 
 # 难度偏差: easy / normal / hard
-difficulty_bias = "normal"
+difficulty_bias = "hard"
 
 # 艾宾浩斯复习间隔（天）
 ebbinghaus_intervals = [1, 2, 4, 7, 15]
