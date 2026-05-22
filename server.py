@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import time
+import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -482,16 +483,16 @@ def admin_report():
 
 @app.route("/feishu/poll", methods=["POST"])
 def feishu_poll_trigger():
-    """手动触发一次消息轮询（用于测试）。"""
-    poll_feishu_messages()
+    """手动触发一次消息轮询（异步，立即返回）。"""
+    threading.Thread(target=poll_feishu_messages, daemon=True).start()
     return jsonify({"code": 0, "msg": "已触发轮询"})
 
 
 @app.route("/push", methods=["POST"])
 def manual_push_trigger():
-    """手动触发每日推送（立即出题并推送）。"""
-    scheduled_daily_push()
-    return jsonify({"code": 0, "msg": "已触发每日推送"})
+    """手动触发每日推送（异步，立即返回）。"""
+    threading.Thread(target=scheduled_daily_push, daemon=True).start()
+    return jsonify({"code": 0, "msg": "已触发每日推送，正在后台执行..."})
 
 
 @app.route("/feishu/config", methods=["GET", "POST"])
