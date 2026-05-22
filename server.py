@@ -79,11 +79,17 @@ def _handle_feishu_event(event: dict):
 
         result = run(
             f"[系统上下文：飞书用户 sender_open_id={sender_id}, {target_desc}]\n"
-            f"学生发来一张图片，已保存到 {local_path}。\n"
-            f"请用 ocr_image 识别图片内容，然后判断：\n"
-            f"1. 如果是答题 → 批改并发送结果\n"
-            f"2. 如果不是答题 → 友好回复\n"
-            f"处理完用 send_feishu(receive_id=\"{reply_target}\", ...) 发送结果。",
+            f"学生发来一张图片，已保存到 {local_path}。\n\n"
+            f"请严格按照 root.md「图片处理」流程执行：\n"
+            f"1. 用 ocr_image 识别（一次即可，返回 confidence_hint）\n"
+            f"2. 不管 confidence_hint 是多少，都必须用 call_llm 做【第1轮清理】→【第2轮结构化】→【第3轮交叉验证】\n"
+            f"3. 三轮增强后如有[疑似]项>30%，用 send_feishu 请学生确认\n"
+            f"4. 确认后按批改流程（读today_questions.json→call_llm批改→更新mastery/error_book→send_feishu发送结果）\n\n"
+            f"⚠️ 关键约束：\n"
+            f"- 绝对不要用 bash 执行本地OCR脚本\n"
+            f"- ocr_image 只调用1次\n"
+            f"- 必须走完3轮LLM增强再决定是否需要确认\n"
+            f"- receive_id 用 \"{reply_target}\"",
             session,
         )
         print(f"[INFO] 图片处理完成: {result[:100] if result else 'None'}")

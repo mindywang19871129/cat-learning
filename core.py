@@ -245,48 +245,181 @@ def web_search(query: str, max_results: int = 5) -> str:
     return "\n".join(parts) if parts else "(no results)"
 
 
-# ─── 工具 9：OCR 图片识别 ───────────────────────────────────────────
+# ─── 工具 9：OCR 图片识别（纯云端多引擎）────────────────────────────
+# 引擎优先级：飞书OCR → OCR.space → 均失败报错
+# 不依赖任何本地能力（Tesseract/Apple Vision），完全适配云端部署。
+
+OCR_SPACE_API_KEY = os.environ.get("OCR_SPACE_API_KEY", "")
+
+
+def _recognize_via_feishu(p: Path) -> dict | None:
+    """飞书OCR：先试JSON base64格式，再试multipart。返回结果或None。"""
+    import requests
+    token = _get_feishu_token()
+    if not token:
+        return None
+
+    # 策略1: JSON base64（某些版本飞书API需要这种格式）
+    try:
+        with open(str(p), "rb") as f:
+            img_b64 = base64.b64encode(f.read()).decode()
+        resp = requests.post(
+            f"{FEISHU_BASE}/optical_char_recognition/v1/image/basic_recognize",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"image": img_b64},
+            timeout=30,
+        )
+        if resp.status_code == 200 and resp.json().get("code") == 0:
+            data = resp.json()
+            raw_lines = data.get("data", {}).get("text_lines", [])
+            if raw_lines:
+                return {"raw_lines": raw_lines}
+    except Exception:
+        pass
+
+    # 策略2: multipart form-data
+    try:
+        with open(str(p), "rb") as img_file:
+            resp = requests.post(
+                f"{FEISHU_BASE}/optical_char_recognition/v1/image/basic_recognize",
+                headers={"Authorization": f"Bearer {token}"},
+                files={"image": (p.name, img_file, "application/octet-stream")},
+                timeout=30,
+            )
+        if resp.status_code == 200 and resp.json().get("code") == 0:
+            data = resp.json()
+            raw_lines = data.get("data", {}).get("text_lines", [])
+            if raw_lines:
+                return {"raw_lines": raw_lines}
+    except Exception:
+        pass
+
+    return None
+
+
+def _recognize_via_ocrspace(p: Path) -> dict | None:
+    """OCR.space 免费API（每月25000次，支持中文手写体）。"""
+    if not OCR_SPACE_API_KEY:
+        return None
+    import requests
+
+    try:
+        with open(str(p), "rb") as img_file:
+            resp = requests.post(
+                "https://api.ocr.space/parse/image",
+                headers={"apikey": OCR_SPACE_API_KEY},
+                files={"file": (p.name, img_file)},
+                data={
+                    "language": "chs",       # 简体中文
+                    "OCREngine": 2,          # 引擎2：擅长多语言、自动检测
+                    "isTable": "true",       # 逐行返回，适合答题格式
+                    "scale": "true",         # 内部放大，提高手写体识别率
+                },
+                timeout=30,
+            )
+        if resp.status_code != 200:
+            return None
+
+        data = resp.json()
+        if data.get("IsErroredOnProcessing", True):
+            return None
+
+        results = data.get("ParsedResults", [])
+        if not results:
+            return None
+
+        # 取第一个结果（单页图片）
+        parsed = results[0]
+        text = parsed.get("ParsedText", "").strip()
+        if text:
+            lines = [line.strip() for line in text.split("\n") if line.strip()]
+            return {
+                "raw_lines": lines,
+                "ocr_exit_code": parsed.get("FileParseExitCode", -1),
+                "error_details": parsed.get("ErrorMessage", ""),
+            }
+    except Exception:
+        pass
+
+    return None
+
 
 def ocr_image(image_path: str) -> str:
     """
-    识别图片中的文字（支持手写和印刷体）。
-    优先 Tesseract，降级到 DeepSeek Vision。
+    识别图片中的文字（纯云端多引擎方案）。
+    
+    优先级：飞书OCR → OCR.space → 均失败报错
+    返回结构化JSON供 LLM Agent 做多轮增强清洗。
+
+    返回格式：
+    {
+      "engine": "feishu_ocr" | "ocrspace" | "none",
+      "text": "逐行合并的原始识别文本",
+      "line_count": 行数,
+      "confidence_hint": "high"|"medium"|"low",
+      "raw_lines": ["行1", "行2", ...],
+      "ocr_exit_code": 仅ocrspace有,
+      "success": true|false,
+      "error": 仅失败时有
+    }
     """
     p = _resolve(image_path)
     if not p.exists():
-        return f"ERROR: 图片文件不存在: {image_path}"
+        return json.dumps({"success": False, "error": f"图片文件不存在: {image_path}"}, ensure_ascii=False)
 
-    # 尝试 Tesseract
-    try:
-        import pytesseract
-        from PIL import Image
-        lang = CFG.get("ocr", {}).get("tesseract_lang", "chi_sim+eng")
-        img = Image.open(str(p))
-        text = pytesseract.image_to_string(img, lang=lang)
-        if text.strip():
-            return json.dumps({"engine": "tesseract", "text": text.strip(), "success": True}, ensure_ascii=False)
-    except ImportError:
-        pass
+    # 检查图片大小（API限制）
+    file_size = p.stat().st_size
+    if file_size > 10 * 1024 * 1024:
+        return json.dumps({"success": False, "error": "图片超过10MB限制"}, ensure_ascii=False)
 
-    # 降级到 DeepSeek Vision
-    try:
-        with open(str(p), "rb") as img_file:
-            img_base64 = base64.b64encode(img_file.read()).decode()
-        resp = CLIENT.chat.completions.create(
-            model=MODEL,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "请识别图片中的所有文字，只输出文字内容，不要添加额外说明。"},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_base64}"}},
-                ],
-            }],
-            stream=False,
-        )
-        text = resp.choices[0].message.content or ""
-        return json.dumps({"engine": "deepseek_vision", "text": text.strip(), "success": bool(text.strip())}, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+    engines_tried = []
+
+    # ── 引擎1：飞书OCR ──
+    result = _recognize_via_feishu(p)
+    if result:
+        engines_tried.append("feishu_ocr")
+    else:
+        # ── 引擎2：OCR.space ──
+        result = _recognize_via_ocrspace(p)
+        if result:
+            engines_tried.append("ocrspace")
+
+    engine_name = engines_tried[0] if engines_tried else "none"
+
+    if not result:
+        # 两个引擎都失败了
+        hint = ""
+        if not OCR_SPACE_API_KEY:
+            hint = " 提示：设置OCR_SPACE_API_KEY环境变量可启用ocr.space免费OCR（https://ocr.space/ocrapi注册获取）"
+        return json.dumps({
+            "success": False,
+            "engine": "none",
+            "error": f"所有云端OCR引擎均失败（飞书OCR+OCR.space）。{hint}",
+        }, ensure_ascii=False)
+
+    # 格式化结果
+    raw_lines = result.get("raw_lines", [])
+    text = "\n".join(raw_lines)
+    line_count = len(raw_lines)
+
+    # 启发式置信度（考虑到手写体场景，保守评估）
+    if line_count >= 2 and all(len(line) >= 2 for line in raw_lines):
+        confidence_hint = "medium"  # 手写体最多给medium，让LLM做增强
+    elif line_count >= 1 and any(len(line) >= 1 for line in raw_lines):
+        confidence_hint = "low"
+    else:
+        confidence_hint = "low"
+
+    return json.dumps({
+        "engine": engine_name,
+        "text": text,
+        "line_count": line_count,
+        "confidence_hint": confidence_hint,
+        "raw_lines": raw_lines,
+        "success": True,
+        **({"ocr_exit_code": result.get("ocr_exit_code"), "error_details": result.get("error_details", "")}
+           if engine_name == "ocrspace" else {}),
+    }, ensure_ascii=False)
 
 
 # ─── 工具 10：飞书消息发送 ──────────────────────────────────────────
@@ -475,7 +608,8 @@ TOOL_SCHEMAS = [
         }, "required": ["query"]},
     }},
     {"type": "function", "function": {
-        "name": "ocr_image", "description": "识别图片中的文字（支持手写和印刷体），返回识别的文本。",
+        "name": "ocr_image",
+        "description": "【纯云端多引擎】识别图片中的文字（支持手写/印刷体）。自动选择飞书OCR或ocr.space免费API。返回JSON：engine/raw_lines/text/confidence_hint(high|medium|low)。对于手写体，confidence通常为medium/low，务必用call_llm做3轮增强清洗（清理噪音→结构化提取→交叉验证）。只调用一次即可，不要重复调用。",
         "parameters": {"type": "object", "properties": {
             "image_path": {"type": "string", "description": "本地图片文件路径"},
         }, "required": ["image_path"]},

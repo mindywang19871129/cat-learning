@@ -13,7 +13,7 @@ data = "data"
 tools = "tools"
 
 [runtime]
-max_iterations = 20
+max_iterations = 30
 max_tool_output = 8000
 server_port = 8192
 
