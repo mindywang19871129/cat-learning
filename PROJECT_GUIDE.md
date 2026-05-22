@@ -1,9 +1,11 @@
 # 🐱 小肥猫学习助手 v2.2 — 项目完整手册
 
-> 最后更新：2026-05-22 | 工作空间：`/Users/mindy/CodeBuddy/20260521173149/cat-learning`
+> 最后更新：2026-05-22 14:39 | 工作空间：`/Users/mindy/CodeBuddy/20260521173149/cat-learning`
 > GitHub: `git@github.com:mindywang19871129/cat-learning.git`
 >
 > **变更记录**：见 Git 提交历史。每次变更同步更新本文档。
+>
+> **当前部署状态**：代码 v2.2 | DeepSeek ✅ | 飞书 ✅ | OCR.space ⚠️待加Key | 家长密码 ✅
 
 ---
 
@@ -263,6 +265,42 @@ data/
 ---
 
 ## 五、操作指引
+
+### 5.0 部署后首次配置（必做，仅一次）
+
+部署完成后，需完成以下3项配置才能长期稳定运行：
+
+**① 激活 OCR.space 降级引擎（防飞书频率限制）**
+
+访问 [ocr.space/ocrapi](https://ocr.space/ocrapi) 免费注册，填邮箱即得 API Key（每月25000次），然后：
+
+```bash
+echo 'OCR_SPACE_API_KEY=你的Key' >> /opt/cat-learning/.env
+```
+
+飞书OCR频率限制时自动切换到此引擎，不再出现 `engine=none`。
+
+**② 设置家长管理密码**
+
+```bash
+curl -X POST http://localhost:8192/admin/init \
+  -H "Content-Type: application/json" \
+  -d '{"password": "你的密码（至少4位）"}'
+# 返回: {"code":0,"msg":"初始化成功，密码已设置"}
+```
+
+密码 SHA256 哈希存储在 `data/adjustments.json`，后续通过飞书调参时需要验证。
+
+**③ 全链路验证**
+
+```bash
+bash /opt/cat-learning/verify_all.sh
+# 期望：全部7步通过（第4步 OCR 至少一个引擎成功）
+```
+
+完成后系统即进入长期稳定运行状态，无需额外操作。
+
+---
 
 ### 5.1 日常使用
 
