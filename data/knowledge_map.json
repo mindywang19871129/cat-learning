@@ -1,0 +1,100 @@
+{
+  "math": {
+    "unit_1_division": {
+      "name": "除法",
+      "topics": [
+        {"id": "M1.1", "name": "两位数除以一位数", "grade": 3, "mastery": 0},
+        {"id": "M1.2", "name": "三位数除以一位数", "grade": 3, "mastery": 0},
+        {"id": "M1.3", "name": "商中间有0的除法", "grade": 3, "mastery": 0},
+        {"id": "M1.4", "name": "有余数的除法", "grade": 3, "mastery": 0}
+      ]
+    },
+    "unit_2_graph_motion": {
+      "name": "图形的运动",
+      "topics": [
+        {"id": "M2.1", "name": "轴对称图形", "grade": 3, "mastery": 0},
+        {"id": "M2.2", "name": "平移", "grade": 3, "mastery": 0},
+        {"id": "M2.3", "name": "旋转", "grade": 3, "mastery": 0}
+      ]
+    },
+    "unit_3_multiplication": {
+      "name": "乘法",
+      "topics": [
+        {"id": "M3.1", "name": "两位数乘两位数", "grade": 3, "mastery": 0},
+        {"id": "M3.2", "name": "进位乘法", "grade": 3, "mastery": 0},
+        {"id": "M3.3", "name": "末尾有0的乘法", "grade": 3, "mastery": 0}
+      ]
+    },
+    "unit_4_mass": {
+      "name": "千克、克、吨",
+      "topics": [
+        {"id": "M4.1", "name": "质量单位认识", "grade": 3, "mastery": 0},
+        {"id": "M4.2", "name": "质量单位换算", "grade": 3, "mastery": 0},
+        {"id": "M4.3", "name": "质量实际感知", "grade": 3, "mastery": 0},
+        {"id": "M4.4", "name": "质量解决问题", "grade": 3, "mastery": 0}
+      ]
+    },
+    "unit_5_area": {
+      "name": "面积",
+      "topics": [
+        {"id": "M5.1", "name": "面积概念", "grade": 3, "mastery": 0},
+        {"id": "M5.2", "name": "长方形正方形面积公式", "grade": 3, "mastery": 0},
+        {"id": "M5.3", "name": "面积单位换算", "grade": 3, "mastery": 0}
+      ]
+    },
+    "unit_6_fraction": {
+      "name": "认识分数",
+      "topics": [
+        {"id": "M6.1", "name": "分数的意义", "grade": 3, "mastery": 0},
+        {"id": "M6.2", "name": "分数大小比较", "grade": 3, "mastery": 0},
+        {"id": "M6.3", "name": "同分母分数加减", "grade": 3, "mastery": 0},
+        {"id": "M6.4", "name": "分数的简单应用", "grade": 3, "mastery": 0}
+      ]
+    },
+    "unit_7_data": {
+      "name": "数据的整理和表示",
+      "topics": [
+        {"id": "M7.1", "name": "分类统计", "grade": 3, "mastery": 0},
+        {"id": "M7.2", "name": "简单图表", "grade": 3, "mastery": 0},
+        {"id": "M7.3", "name": "数据分析和决策", "grade": 3, "mastery": 0}
+      ]
+    }
+  },
+  "english": {
+    "vocabulary": {
+      "name": "KET词汇",
+      "levels": {
+        "P0_basic": {
+          "name": "基础层",
+          "topics": ["数字", "颜色", "家庭", "食物", "身体", "穿着"],
+          "word_count": 80
+        },
+        "P1_intermediate": {
+          "name": "进阶层",
+          "topics": ["学校", "运动", "天气", "交通", "职业", "娱乐"],
+          "word_count": 100
+        },
+        "P2_advanced": {
+          "name": "挑战层",
+          "topics": ["情感", "自然", "社会", "科技", "艺术"],
+          "word_count": 80
+        }
+      }
+    },
+    "grammar": {
+      "name": "KET语法路线",
+      "topics": [
+        {"id": "G1", "name": "一般现在时", "week": 1},
+        {"id": "G2", "name": "现在进行时", "week": 2},
+        {"id": "G3", "name": "一般过去时", "week": 3},
+        {"id": "G4", "name": "一般将来时", "week": 4},
+        {"id": "G5", "name": "比较级和最高级", "week": 5},
+        {"id": "G6", "name": "情态动词", "week": 6},
+        {"id": "G7", "name": "介词", "week": 7},
+        {"id": "G8", "name": "连词", "week": 8},
+        {"id": "G9", "name": "疑问句", "week": 9},
+        {"id": "G10", "name": "综合复习", "week": 10}
+      ]
+    }
+  }
+}

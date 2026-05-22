@@ -1,0 +1,14 @@
+{
+  "admin_password": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
+  "settings": {
+    "math_daily_count": 4,
+    "english_daily_count": 4,
+    "difficulty_bias": "easy",
+    "focus_topics": [],
+    "excluded_topics": []
+  },
+  "schedule": {
+    "push_time": "09:00",
+    "friday_3days": true
+  }
+}

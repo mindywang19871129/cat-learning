@@ -1,0 +1,68 @@
+[api]
+model = "deepseek-chat"
+base_url = "https://api.deepseek.com/v1"
+max_tokens = 4096
+temperature = 0.7
+
+[paths]
+workspace = "workspace"
+sessions = "data/sessions"
+notes = "data/notes"
+methods = "methods"
+data = "data"
+tools = "tools"
+
+[runtime]
+max_iterations = 20
+max_tool_output = 8000
+server_port = 8192
+
+[education]
+# 每日学习配置
+math_daily_count = 4
+english_daily_count = 4
+exam_questions_count = 25      # 模考题数
+
+# 出题时间
+push_time = "09:00"
+friday_3days = true            # 周五推送三天题目
+
+# 课程起始日
+course_start_date = "2026-05-14"
+
+# 难度偏差: easy / normal / hard
+difficulty_bias = "normal"
+
+# 艾宾浩斯复习间隔（天）
+ebbinghaus_intervals = [1, 2, 4, 7, 15]
+
+# 掌握度阈值
+[education.mastery]
+mastered = 90         # >= 90 已掌握，降低出题频率
+learning = 60         # 60-89 学习中
+weak = 30             # 30-59 薄弱
+critical = 0          # < 30 严重不足
+
+# 掌握度分变动
+[education.mastery_score]
+perfect = 5           # 全对 +5
+partial = 1           # 部分对 +1
+wrong = -10           # 全错 -10
+
+[feishu]
+# 飞书API基础URL
+base_url = "https://open.feishu.cn/open-apis"
+# 消息卡片颜色
+card_color = "orange"
+
+[ocr]
+# OCR引擎: tesseract / deepseek_vision / feishu
+engine = "tesseract"
+# tesseract语言包
+tesseract_lang = "chi_sim+eng"
+
+[exam]
+# 模考配置
+math_timeout_minutes = 60
+ket_reading_writing_minutes = 60
+ket_listening_minutes = 30
