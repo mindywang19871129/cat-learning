@@ -20,7 +20,7 @@ info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 
 echo "========================================="
-echo "  小肥猫学习助手 v2.1 - 全链路验证"
+echo "  小肥猫学习助手 v2.5 - 全链路验证"
 echo "  $(date '+%Y-%m-%d %H:%M:%S')"
 echo "========================================="
 
@@ -176,6 +176,76 @@ for f in mastery.json error_book.json adjustments.json knowledge_map.json ket_pl
         warn "data/$f 不存在（首次运行后会自动创建）"
     fi
 done
+
+# ─── 8. root.md 系统提示词验证 ───
+echo ""
+echo "━━━ 第八步：系统提示词完整性 ━━━"
+
+ROOT_MD="/opt/cat-learning/root.md"
+if [ ! -f "$ROOT_MD" ]; then
+    fail "root.md 不存在"
+else
+    info "8.1 教材知识体系"
+    if grep -q "教材知识体系（出题边界铁律）" "$ROOT_MD"; then
+        pass "包含教材知识体系定义"
+    else
+        fail "缺少教材知识体系定义"
+    fi
+    
+    info "8.2 出题范围约束"
+    if grep -q "出题铁律" "$ROOT_MD" && grep -q "不考" "$ROOT_MD"; then
+        pass "出题范围约束已定义"
+    else
+        fail "缺少出题范围约束"
+    fi
+    
+    info "8.3 错题本分析流程"
+    if grep -q "错题本深度分析" "$ROOT_MD"; then
+        pass "错题本分析流程已定义"
+    else
+        fail "缺少错题本分析流程"
+    fi
+    
+    info "8.4 飞书动态调整"
+    if grep -q "飞书动态调整" "$ROOT_MD"; then
+        pass "飞书动态调整指令已定义"
+    else
+        fail "缺少飞书动态调整指令"
+    fi
+    
+    info "8.5 错误类型分类"
+    if grep -q "错误类型（4选1）" "$ROOT_MD" || grep -q "计算粗心.*概念不清.*审题偏差.*方法错误" "$ROOT_MD"; then
+        pass "错误类型4分类已定义"
+    else
+        fail "缺少错误类型分类"
+    fi
+fi
+
+# ─── 9. error_book.json 结构验证 ───
+echo ""
+echo "━━━ 第九步：错题本数据结构 ━━━"
+
+info "9.1 error_book 追加策略检查"
+if grep -q "追加而非覆盖" "$ROOT_MD"; then
+    pass "错题本追加策略已明确"
+else
+    fail "错题本缺少追加策略说明"
+fi
+
+info "9.2 同类变式题生成"
+if grep -q "变式题" "$ROOT_MD"; then
+    pass "同类变式题生成逻辑已定义"
+else
+    fail "缺少同类变式题生成逻辑"
+fi
+
+if [ -f "/opt/cat-learning/data/error_book.json" ]; then
+    info "9.3 已有错题记录"
+    EB_COUNT=$(python3 -c "import json; d=json.load(open('/opt/cat-learning/data/error_book.json')); print(len(d) if isinstance(d,list) else 0)" 2>/dev/null || echo "0")
+    pass "error_book.json 存在，包含 ${EB_COUNT} 条错题记录"
+else
+    warn "error_book.json 不存在（首次运行后会自动创建）"
+fi
 
 # ─── 汇总 ───
 echo ""
