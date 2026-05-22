@@ -142,21 +142,48 @@ bash test.sh 10.100.13.215 8192
 
 ---
 
-## 📡 飞书开放平台配置
+## 📡 飞书集成（内网无公网IP - 轮询模式）
 
-进入[飞书开放平台](https://open.feishu.cn) → 你的应用 → 事件订阅：
+> ⚠️ 如果没有公网 IP，飞书回调无法到达内网服务器。本项目支持**消息轮询模式**，服务器主动拉取聊天消息，无需公网IP。
 
-| 设置项 | 值 |
-|--------|-----|
-| 请求网址 URL | `http://你的服务器IP:8192/feishu/event` |
-| Verification Token | `cat_learning_2026` |
+### 配置轮询
 
-事件订阅：
-- 点击「添加事件」
-- 搜索 `im.message.receive_v1`（接收消息）
-- 勾选并保存
+部署完成后，告诉服务器要监控哪个聊天：
 
-> ⚠️ 如果没有公网 IP，飞书回调无法到达内网服务器。可以考虑：
+```bash
+# 替换成你的聊天ID（去飞书给机器人发条消息后获取）
+curl -X POST http://localhost:8192/feishu/config \
+  -H "Content-Type: application/json" \
+  -d '{"chat_ids":["你的聊天ID"]}'
+
+# 重启生效
+systemctl restart cat-learning
+```
+
+### 获取聊天ID
+
+在服务器上执行，从已发送的消息中获取：
+```bash
+TOKEN=$(curl -s -X POST 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal' \
+  -H 'Content-Type: application/json' \
+  -d '{"app_id":"cli_aa84657cf6fa1bc1","app_secret":"UF0E3oW1OiTUXTEJWOrTAcDZTlwPhnar"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['tenant_access_token'])")
+
+curl -s "https://open.feishu.cn/open-apis/im/v1/chats?page_size=20" \
+  -H "Authorization: Bearer $TOKEN" | python3 -c "
+import sys,json
+data = json.load(sys.stdin)
+for item in data.get('data',{}).get('items',[]):
+    print(f\"{item['name']:20s}  chat_id={item['chat_id']}\")
+"
+```
+
+### 详细验证
+
+参考 [VERIFY.md](./VERIFY.md) 查看完整的端到端验证步骤。
+
+---
+
+## 📡 飞书开放平台配置（仅公网IP需要）
 > - 使用内网穿透工具（frp / ngrok）
 > - 配置 Nginx 反向代理 + 公网入口
 

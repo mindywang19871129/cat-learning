@@ -323,10 +323,10 @@ def _get_feishu_token() -> str:
 
 def send_feishu(receive_id: str, msg_type: str, content: str) -> str:
     """
-    发送飞书消息。
+    发送飞书消息，自动识别 open_id / chat_id / user_id。
 
     Args:
-        receive_id: 接收者 open_id（或 chat_id）
+        receive_id: 接收者 ID（ou_xxx, oc_xxx, on_xxx）
         msg_type: "text"（纯文本）或 "interactive"（卡片消息，content 为卡片 JSON 字符串）
         content: 消息内容
     """
@@ -334,6 +334,16 @@ def send_feishu(receive_id: str, msg_type: str, content: str) -> str:
     token = _get_feishu_token()
     if not token:
         return "ERROR: 飞书未配置（FEISHU_APP_ID/FEISHU_APP_SECRET 未设置）"
+
+    # 自动识别 receive_id 类型
+    if receive_id.startswith("oc_"):
+        id_type = "chat_id"
+    elif receive_id.startswith("ou_"):
+        id_type = "open_id"
+    elif receive_id.startswith("on_"):
+        id_type = "union_id"
+    else:
+        id_type = "open_id"  # fallback
 
     headers = {
         "Authorization": f"Bearer {token}",
@@ -355,7 +365,7 @@ def send_feishu(receive_id: str, msg_type: str, content: str) -> str:
 
     try:
         resp = requests.post(
-            f"{FEISHU_BASE}/im/v1/messages?receive_id_type=open_id",
+            f"{FEISHU_BASE}/im/v1/messages?receive_id_type={id_type}",
             headers=headers,
             json=body,
             timeout=10,
@@ -472,9 +482,9 @@ TOOL_SCHEMAS = [
     }},
     {"type": "function", "function": {
         "name": "send_feishu",
-        "description": "发送飞书消息给指定用户。msg_type='text' 为纯文本，msg_type='interactive' 为卡片消息（content 需为完整的飞书卡片 JSON 对象字符串）。",
+        "description": "发送飞书消息。receive_id 支持 ou_（用户open_id）、oc_（群聊chat_id）、on_（union_id），系统自动识别。msg_type='text' 为纯文本，msg_type='interactive' 为卡片消息（content 需为完整的飞书卡片 JSON 对象字符串）。",
         "parameters": {"type": "object", "properties": {
-            "receive_id": {"type": "string", "description": "接收者的 open_id"},
+            "receive_id": {"type": "string", "description": "接收者ID：ou_xxx=用户私聊, oc_xxx=群聊, on_xxx=union_id"},
             "msg_type": {"type": "string", "description": "消息类型：text 或 interactive"},
             "content": {"type": "string", "description": "消息内容。interactive 类型时需为完整的飞书卡片 JSON 字符串"},
         }, "required": ["receive_id", "msg_type", "content"]},

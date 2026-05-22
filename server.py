@@ -9,6 +9,7 @@ Flask Web 服务器。极简设计：
 import json
 import os
 import sys
+import time
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -41,6 +42,7 @@ def _handle_feishu_event(event: dict):
 
     sender_id = event.get("sender", {}).get("sender_id", {}).get("open_id", "")
     message_id = event.get("message", {}).get("message_id", "")
+    chat_id = event.get("message", {}).get("chat_id", "")
     msg = event.get("message", {})
     msg_type = msg.get("message_type", "text")
     content_str = msg.get("content", "{}")
@@ -54,7 +56,11 @@ def _handle_feishu_event(event: dict):
     if not text and msg_type != "image":
         return
 
-    print(f"[INFO] 飞书消息: sender={sender_id[:12]}... type={msg_type} text={text[:80]}")
+    # 回复目标：群聊消息回群聊，私聊消息回私聊
+    reply_target = chat_id if chat_id else sender_id
+    target_desc = f"回复目标ID={reply_target}（群聊→发到群，私聊→发到用户）"
+
+    print(f"[INFO] 飞书消息: sender={sender_id[:12]}... type={msg_type} text={text[:80]} reply_to={reply_target[:16]}...")
 
     session = init_new_session()
 
@@ -65,31 +71,31 @@ def _handle_feishu_event(event: dict):
         local_path = download_feishu_image(message_id, image_key)
         if not local_path:
             run(
-                f"[系统上下文：飞书用户 sender_open_id={sender_id}]\n"
-                f"用户发来一张图片但下载失败，请告知用户。用 send_feishu 回复。",
+                f"[系统上下文：飞书用户 sender_open_id={sender_id}, {target_desc}]\n"
+                f"用户发来一张图片但下载失败，请告知用户。用 send_feishu(receive_id=\"{reply_target}\", ...) 回复。",
                 session,
             )
             return
 
         result = run(
-            f"[系统上下文：飞书用户 sender_open_id={sender_id}]\n"
+            f"[系统上下文：飞书用户 sender_open_id={sender_id}, {target_desc}]\n"
             f"学生发来一张图片，已保存到 {local_path}。\n"
             f"请用 ocr_image 识别图片内容，然后判断：\n"
             f"1. 如果是答题 → 批改并发送结果\n"
             f"2. 如果不是答题 → 友好回复\n"
-            f"处理完用 send_feishu 发送结果给 {sender_id}。",
+            f"处理完用 send_feishu(receive_id=\"{reply_target}\", ...) 发送结果。",
             session,
         )
         print(f"[INFO] 图片处理完成: {result[:100] if result else 'None'}")
     else:
         result = run(
-            f"[系统上下文：飞书用户 sender_open_id={sender_id}]\n"
+            f"[系统上下文：飞书用户 sender_open_id={sender_id}, {target_desc}]\n"
             f"学生发来消息：{text}\n\n"
             f"请根据消息内容自主判断和处理：\n"
             f"- 如果是答题（如'第1题答案是...'）→ 批改\n"
             f"- 如果是家长调参指令（如'调整难度'、'查看学习报告'）→ 先验证密码再执行\n"
             f"- 如果是普通对话 → 友好回复\n"
-            f"处理完用 send_feishu 发送结果给 {sender_id}。",
+            f"处理完用 send_feishu(receive_id=\"{reply_target}\", ...) 发送结果。",
             session,
         )
         print(f"[INFO] 文本处理完成: {result[:100] if result else 'None'}")
@@ -100,25 +106,65 @@ def _handle_feishu_event(event: dict):
 # ══════════════════════════════════════════════════════════════════════
 
 def scheduled_daily_push():
-    """定时每日推送学习任务。"""
+    """定时每日推送学习任务：读取数据 → LLM出题 → 直接调用飞书API推送。"""
     print(f"[SCHEDULER] 执行每日推送: {datetime.now()}")
+    
+    # 读轮询配置，获取推送目标
+    poll_cfg = CFG.get("feishu", {}).get("poll", {})
+    target_chat_ids = poll_cfg.get("chat_ids", [])
+    if not target_chat_ids:
+        print("[SCHEDULER] 未配置推送目标 chat_ids，跳过")
+        return
+    
+    chat_ids_str = json.dumps(target_chat_ids, ensure_ascii=False)
+    
     try:
         session = init_new_session()
         result = run(
-            "请生成今天的学习计划：\n"
-            "1. 读取 data/mastery.json 了解掌握度\n"
-            "2. 读取 data/error_book.json 检查需要复习的错题\n"
-            "3. 读取 data/adjustments.json 查看家长的调参设置\n"
-            "4. 读取 data/knowledge_map.json 了解知识体系\n"
-            "5. 用 call_llm 生成今天的数学和英语练习题\n"
-            "6. 把题目存入 data/today_questions.json\n"
-            "7. 如果配置了推送，用 send_feishu 发卡片消息\n"
-            "注意：发送 feishu 时 receive_id 参数待定，请先完成题目生成。",
+            "请执行完整的每日出题推送流程。\n\n"
+            "═══════════════════════════════════════\n"
+            "第一步：读取数据\n"
+            "═══════════════════════════════════════\n"
+            "1. 读取 data/mastery.json → 找到首批薄弱知识点（score<60的先出）\n"
+            "2. 读取 data/error_book.json → 按艾宾浩斯曲线检查今天该复习的错题\n"
+            "3. 读取 data/adjustments.json → 获取题数/难度设置\n"
+            "4. 读取 data/knowledge_map.json → 确认知识范围\n\n"
+            "═══════════════════════════════════════\n"
+            "第二步：出题（用 call_llm，严格质量）\n"
+            "═══════════════════════════════════════\n"
+            "数学题要求：\n"
+            "- 从北师大版三下7个单元中，优先出 mastery<60 的知识点\n"
+            "- 每道题必须融入「具象优先」原则：题目要用生活场景包装（切披萨、分糖果、逛超市等）\n"
+            "- 按「基础→提升→拓展」三级分层，每道标注难度等级\n"
+            "- 包含：计算题+应用题+图形题，不要全是同类型\n"
+            "- 每道题给出完整的标准答案和简要解题思路\n\n"
+            "英语题要求：\n"
+            "- 从KET 10个语法点+3层词汇中，优先出薄弱语法点\n"
+            "- 每道题标注考核目标（时态/词汇/语法/阅读理解）\n"
+            "- 包含：填空+选择+翻译/造句，混合出题\n"
+            "- 每道题给出标准答案和纠错提示\n\n"
+            "═══════════════════════════════════════\n"
+            "第三步：存储 → 存入 data/today_questions.json\n"
+            "═══════════════════════════════════════\n"
+            "格式：{\"date\":\"2026-05-22\",\"math\":[{id,question,answer,hint,difficulty,topic_id}],\"english\":[{id,question,answer,hint,topic_id}]}\n\n"
+            "═══════════════════════════════════════\n"
+            "第四步：推送 → 用 send_feishu 发卡片到每个 chat\n"
+            "═══════════════════════════════════════\n"
+            f"推送目标聊天ID：{chat_ids_str}\n"
+            "卡片消息格式要求：\n"
+            "- 使用 interactive 卡片，header 用 orange 色，标题「🐱 小肥猫今日学习任务 (日期)」\n"
+            "- 数学区用 📐 标识，英语区用 📖 标识\n"
+            "- 每道题单独编号（如「第1题」「第2题」），方便小朋友回复\n"
+            "- 末尾明确告诉小朋友：回复时请写「第X题答案是...」，可以拍照也可以打字\n"
+            "- 加上🐱鼓励语，语气温暖亲切\n"
+            "- 如果今天是周五且 adjustments.json 中 friday_3days=true，生成周五+周六+周日3天的题目\n\n"
+            "⚠️ 重要：send_feishu 的 receive_id 参数就是上面提供的 chat_id（oc_开头），系统会自动识别为聊天ID。",
             session,
         )
-        print(f"[SCHEDULER] 每日推送完成: {result[:200] if result else 'None'}")
+        print(f"[SCHEDULER] 每日推送完成: {result[:300] if result else 'None'}")
     except Exception as e:
         print(f"[SCHEDULER] 每日推送失败: {e}")
+        traceback.print_exc()
 
 
 def start_scheduler():
@@ -126,8 +172,125 @@ def start_scheduler():
     hour, minute = map(int, push_time.split(":"))
     scheduler = BackgroundScheduler()
     scheduler.add_job(scheduled_daily_push, 'cron', hour=hour, minute=minute, id='daily_push')
+    
+    # 飞书消息轮询（内网无公网IP模式）
+    poll_cfg = CFG.get("feishu", {}).get("poll", {})
+    if poll_cfg.get("enabled") and poll_cfg.get("chat_ids"):
+        interval = poll_cfg.get("interval_seconds", 10)
+        scheduler.add_job(poll_feishu_messages, 'interval', seconds=interval, id='feishu_poll')
+        print(f"[POLL] 飞书消息轮询已启动，间隔 {interval}s，监控 {len(poll_cfg['chat_ids'])} 个聊天")
+    
     scheduler.start()
     print(f"[SCHEDULER] 已启动，每日 {push_time} 推送")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 飞书消息轮询（内网无公网IP模式）
+# ══════════════════════════════════════════════════════════════════════
+
+POLL_STATE_FILE = DATA_DIR / "poll_state.json"
+
+def _load_poll_state() -> dict:
+    """加载轮询状态（已处理的消息ID）。"""
+    if POLL_STATE_FILE.exists():
+        try:
+            return json.loads(POLL_STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+def _save_poll_state(state: dict):
+    """保存轮询状态。"""
+    POLL_STATE_FILE.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+def _get_feishu_token_from_env() -> str:
+    """获取飞书 access_token（复用 core.py 的缓存，这里做兜底）。"""
+    import requests, time as _time
+    FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID", "")
+    FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "")
+    if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
+        return ""
+    FEISHU_BASE = CFG.get("feishu", {}).get("base_url", "https://open.feishu.cn/open-apis")
+    resp = requests.post(
+        f"{FEISHU_BASE}/auth/v3/tenant_access_token/internal",
+        json={"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET},
+        timeout=10,
+    )
+    data = resp.json()
+    return data.get("tenant_access_token", "") if data.get("code") == 0 else ""
+
+
+def poll_feishu_messages():
+    """轮询飞书聊天中的新消息并处理。"""
+    poll_cfg = CFG.get("feishu", {}).get("poll", {})
+    chat_ids = poll_cfg.get("chat_ids", [])
+    if not chat_ids:
+        return
+    
+    token = _get_feishu_token_from_env()
+    if not token:
+        return
+    
+    import requests as _requests
+    headers = {"Authorization": f"Bearer {token}"}
+    state = _load_poll_state()
+    
+    for chat_id in chat_ids:
+        try:
+            resp = _requests.get(
+                f"https://open.feishu.cn/open-apis/im/v1/messages"
+                f"?container_id_type=chat&container_id={chat_id}&page_size=5&sort_type=ByCreateTimeDesc",
+                headers=headers,
+                timeout=10,
+            )
+            data = resp.json()
+            if data.get("code") != 0:
+                continue
+            
+            items = data.get("data", {}).get("items", [])
+            for msg in items:
+                msg_id = msg.get("message_id", "")
+                
+                # 跳过自己发的消息和已处理的消息
+                sender_type = msg.get("sender", {}).get("sender_type", "")
+                if sender_type == "app":
+                    continue
+                if msg_id in state.get(chat_id, {}):
+                    continue
+                
+                # 标记为已处理
+                if chat_id not in state:
+                    state[chat_id] = {}
+                state[chat_id][msg_id] = time.time()
+                _save_poll_state(state)
+                
+                # ─── 关键修复：轮询API返回的消息格式 ≠ 事件回调格式 ───
+                # 轮询API: msg_type + body.content      事件回调: message_type + content
+                # 必须做格式归一化，否则 _handle_feishu_event 无法提取文本/图片
+                sender_id = msg.get("sender", {}).get("id", "")
+                msg_type = msg.get("msg_type", "text")
+                content_str = msg.get("body", {}).get("content", "{}")
+                normalized_msg = {
+                    "message_id": msg_id,
+                    "chat_id": chat_id,
+                    "message_type": msg_type,
+                    "content": content_str,
+                }
+                event = {
+                    "type": "im.message.receive_v1",
+                    "sender": {"sender_id": {"open_id": sender_id}},
+                    "message": normalized_msg,
+                }
+                
+                print(f"[POLL] 新消息: chat={chat_id[:12]}... sender={sender_id[:12]}... type={msg_type} msg_id={msg_id[:12]}...")
+                try:
+                    _handle_feishu_event(event)
+                except Exception as e:
+                    print(f"[POLL] 处理消息出错: {e}")
+                    traceback.print_exc()
+        
+        except Exception as e:
+            print(f"[POLL] 轮询 {chat_id[:12]}... 出错: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -136,7 +299,19 @@ def start_scheduler():
 
 @app.route("/", methods=["GET"])
 def index():
-    return jsonify({"app": "小肥猫学习助手", "version": "2.0", "status": "running", "time": datetime.now().isoformat()})
+    poll_cfg = CFG.get("feishu", {}).get("poll", {})
+    return jsonify({
+        "app": "小肥猫学习助手", "version": "2.0", "status": "running",
+        "time": datetime.now().isoformat(),
+        "endpoints": {
+            "health": "/health",
+            "push": "POST /push (手动触发每日出题推送)",
+            "poll": "POST /feishu/poll (手动触发消息轮询)",
+            "config": "GET/POST /feishu/config (查看/配置轮询聊天)",
+        },
+        "poll_enabled": poll_cfg.get("enabled", False),
+        "poll_chats": len(poll_cfg.get("chat_ids", [])),
+    })
 
 
 @app.route("/feishu/event", methods=["POST"])
@@ -238,9 +413,58 @@ def admin_report():
         return jsonify({"raw": result})
 
 
+@app.route("/feishu/poll", methods=["POST"])
+def feishu_poll_trigger():
+    """手动触发一次消息轮询（用于测试）。"""
+    poll_feishu_messages()
+    return jsonify({"code": 0, "msg": "已触发轮询"})
+
+
+@app.route("/push", methods=["POST"])
+def manual_push_trigger():
+    """手动触发每日推送（立即出题并推送）。"""
+    scheduled_daily_push()
+    return jsonify({"code": 0, "msg": "已触发每日推送"})
+
+
+@app.route("/feishu/config", methods=["GET", "POST"])
+def feishu_config():
+    """查看/配置轮询的聊天ID。"""
+    if request.method == "POST":
+        body = request.get_json(force=True, silent=True) or {}
+        chat_ids = body.get("chat_ids", [])
+        if isinstance(chat_ids, list):
+            # 写入 config.toml（简单替换）
+            config_path = HOME / "config.toml"
+            content = config_path.read_text(encoding="utf-8")
+            import re
+            new_ids = "chat_ids = " + json.dumps(chat_ids)
+            content = re.sub(r'chat_ids\s*=\s*\[.*?\]', new_ids, content)
+            config_path.write_text(content, encoding="utf-8")
+            # 重新加载 CFG
+            import tomli
+            CFG.clear()
+            CFG.update(tomli.loads(config_path.read_text(encoding="utf-8")))
+            return jsonify({"code": 0, "msg": f"已更新，监控 {len(chat_ids)} 个聊天", "chat_ids": chat_ids})
+        return jsonify({"code": -1, "msg": "chat_ids 必须是数组"}), 400
+    
+    poll_cfg = CFG.get("feishu", {}).get("poll", {})
+    return jsonify({
+        "enabled": poll_cfg.get("enabled", False),
+        "chat_ids": poll_cfg.get("chat_ids", []),
+        "interval_seconds": poll_cfg.get("interval_seconds", 10),
+    })
+
+
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "time": datetime.now().isoformat()})
+    poll_cfg = CFG.get("feishu", {}).get("poll", {})
+    return jsonify({
+        "status": "ok",
+        "time": datetime.now().isoformat(),
+        "poll_enabled": poll_cfg.get("enabled", False),
+        "poll_chats": len(poll_cfg.get("chat_ids", [])),
+    })
 
 
 # ══════════════════════════════════════════════════════════════════════

@@ -55,6 +55,14 @@ base_url = "https://open.feishu.cn/open-apis"
 # 消息卡片颜色
 card_color = "orange"
 
+# 消息轮询（内网无公网IP时使用，替代事件回调）
+[feishu.poll]
+enabled = true
+# 要轮询的聊天ID列表（去飞书给机器人发消息后按下面方法获取）
+chat_ids = ["oc_a232ed8b096918c5ff89fa9149e321fa"]
+# 轮询间隔（秒）
+interval_seconds = 10
+
 [ocr]
 # OCR引擎: tesseract / deepseek_vision / feishu
 engine = "tesseract"

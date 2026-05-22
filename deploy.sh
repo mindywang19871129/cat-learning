@@ -104,16 +104,29 @@ else
     ok ".env 文件已存在"
 fi
 
+# ---- 先杀掉旧进程 ----
+info "清理旧进程..."
+# 杀掉所有旧的 gunicorn 进程（避免端口占用导致 systemctl 卡死）
+pkill -f "gunicorn server:app" 2>/dev/null || true
+# 也杀掉占用 8192 端口的任何进程
+OLD_PID=$(lsof -ti:8192 2>/dev/null || true)
+if [ -n "$OLD_PID" ]; then
+    kill -9 $OLD_PID 2>/dev/null || true
+    warn "已杀掉占用端口8192的旧进程: $OLD_PID"
+fi
+sleep 1
+ok "旧进程已清理"
+
 # ---- systemd 服务 ----
 if [ "$NO_SYSTEMD" = false ]; then
     info "安装 systemd 服务..."
     
-    # 调整 service 文件中的路径
+    # 调整 service 文件中的路径（注意：不用 --daemon，由 systemd 管理进程）
     SERVICE_FILE="cat-learning.service"
     if [ -f "$SERVICE_FILE" ]; then
         WORKDIR=$(pwd)
         sed -i "s|WorkingDirectory=.*|WorkingDirectory=$WORKDIR|" "$SERVICE_FILE"
-        sed -i "s|ExecStart=.*|ExecStart=$VENV_DIR/bin/gunicorn server:app --bind 0.0.0.0:8192 --workers 2 --timeout 120 --daemon --access-logfile /var/log/cat-learning.log --error-logfile /var/log/cat-learning.log|" "$SERVICE_FILE"
+        sed -i "s|ExecStart=.*|ExecStart=$VENV_DIR/bin/gunicorn server:app --bind 0.0.0.0:8192 --workers 2 --timeout 120 --access-logfile /var/log/cat-learning.log --error-logfile /var/log/cat-learning.log|" "$SERVICE_FILE"
     fi
     
     cp "$SERVICE_FILE" /etc/systemd/system/
@@ -121,28 +134,32 @@ if [ "$NO_SYSTEMD" = false ]; then
     systemctl enable cat-learning
     ok "systemd 服务已安装并设为开机自启"
     
-    # 重启服务
-    info "启动/重启服务..."
-    systemctl restart cat-learning || systemctl start cat-learning
+    # 启动服务（加超时，避免卡死）
+    info "启动服务（最多等待30秒）..."
+    if ! timeout 30 systemctl start cat-learning 2>/dev/null; then
+        warn "systemctl 超时，检查状态..."
+    fi
     sleep 2
     
     if systemctl is-active --quiet cat-learning; then
         ok "服务启动成功"
     else
-        err "服务启动失败，查看日志: sudo journalctl -u cat-learning -n 20"
+        err "服务启动失败，查看日志:"
         echo ""
         systemctl status cat-learning --no-pager -l || true
+        echo ""
+        echo "--- 最近的应用日志 ---"
+        tail -20 /var/log/cat-learning.log 2>/dev/null || echo "  (无日志)"
         echo ""
         warn "尝试手动启动排查问题:"
         echo "  source $VENV_DIR/bin/activate"
         echo "  cd $(pwd)"
-        echo "  gunicorn server:app --bind 0.0.0.0:8192 --workers 2"
+        echo "  $VENV_DIR/bin/gunicorn server:app --bind 0.0.0.0:8192 --workers 2"
         exit 1
     fi
 else
     # 无 systemd，尝试直接前台启动
-    warn "跳过 systemd 安装，尝试直接启动 gunicorn..."
-    echo ""
+    warn "跳过 systemd 安装，直接启动 gunicorn..."
     info "启动命令:"
     echo "  $VENV_DIR/bin/gunicorn server:app --bind 0.0.0.0:8192 --workers 2 --timeout 120 --access-logfile - --error-logfile -"
     echo ""

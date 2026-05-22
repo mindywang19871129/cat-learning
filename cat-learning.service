@@ -3,14 +3,17 @@ Description=小肥猫学习助手 - Cat Learning Assistant
 After=network.target
 
 [Service]
-Type=forking
+Type=simple
 User=root
 WorkingDirectory=/opt/cat-learning
 Environment=PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/opt/venv/bin/gunicorn server:app --bind 0.0.0.0:8192 --workers 2 --timeout 120 --daemon --access-logfile /var/log/cat-learning.log --error-logfile /var/log/cat-learning.log
-ExecStop=/usr/bin/pkill -f "gunicorn server:app"
+ExecStart=/opt/venv/bin/gunicorn server:app --bind 0.0.0.0:8192 --workers 2 --timeout 120 --access-logfile /var/log/cat-learning.log --error-logfile /var/log/cat-learning.log
+ExecStop=/bin/kill -TERM $MAINPID
 Restart=always
 RestartSec=5
+# 超时保护：如果90秒内起不来就放弃
+TimeoutStartSec=90
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
