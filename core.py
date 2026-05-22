@@ -564,6 +564,51 @@ def download_feishu_image(message_id: str, image_key: str) -> Optional[str]:
         return None
 
 
+def download_feishu_file(message_id: str, file_key: str, file_name: str = "") -> Optional[str]:
+    """从飞书下载文件（PDF/文档等），返回本地路径。"""
+    import requests
+    token = _get_feishu_token()
+    if not token:
+        return None
+    try:
+        resp = requests.get(
+            f"{FEISHU_BASE}/im/v1/messages/{message_id}/resources/{file_key}",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"type": "file"},
+            timeout=60,
+        )
+        if resp.status_code != 200:
+            return None
+        save_dir = DATA_DIR / "files"
+        save_dir.mkdir(parents=True, exist_ok=True)
+        # 保留原始文件名
+        save_name = file_name if file_name else f"{file_key}.bin"
+        save_path = save_dir / save_name
+        save_path.write_bytes(resp.content)
+        return str(save_path)
+    except Exception:
+        return None
+
+
+def extract_text_from_pdf(pdf_path: str) -> str:
+    """从PDF文件提取文本内容。返回提取的文本或错误信息。"""
+    try:
+        from PyPDF2 import PdfReader
+        reader = PdfReader(pdf_path)
+        texts = []
+        for i, page in enumerate(reader.pages):
+            page_text = page.extract_text()
+            if page_text and page_text.strip():
+                texts.append(f"--- 第{i+1}页 ---\n{page_text.strip()}")
+        if texts:
+            return "\n\n".join(texts)
+        return "(PDF内容为空或为扫描件，请尝试拍照上传)"
+    except ImportError:
+        return "ERROR: PyPDF2 未安装，请在 requirements.txt 中添加 PyPDF2>=3.0.0"
+    except Exception as e:
+        return f"ERROR: PDF解析失败: {e}"
+
+
 # ══════════════════════════════════════════════════════════════════════
 # 工具注册表 + JSON Schema
 # ══════════════════════════════════════════════════════════════════════

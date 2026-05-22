@@ -22,6 +22,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from core import (
     init_new_session, run, download_feishu_image,
+    download_feishu_file, extract_text_from_pdf,
+    ocr_image,
     verify_password, DATA_DIR, CFG, HOME as CORE_HOME,
 )
 
@@ -93,13 +95,66 @@ def _handle_feishu_event(event: dict):
             session,
         )
         print(f"[INFO] 图片处理完成: {result[:100] if result else 'None'}")
+    elif msg_type == "file":
+        # ── 文件上传处理（教材PDF/文档等）──
+        file_key = content.get("file_key", "")
+        file_name = content.get("file_name", "unknown")
+        if not file_key:
+            return
+
+        print(f"[INFO] 飞书文件: sender={sender_id[:12]}... file={file_name}")
+
+        local_path = download_feishu_file(message_id, file_key, file_name)
+        if not local_path:
+            run(
+                f"[系统上下文：飞书用户 sender_open_id={sender_id}, {target_desc}]\n"
+                f"用户上传了文件 '{file_name}' 但下载失败，请告知用户。用 send_feishu(receive_id=\"{reply_target}\", ...) 回复。",
+                init_new_session(),
+            )
+            return
+
+        # 根据文件类型提取内容
+        ext = file_name.lower().rsplit(".", 1)[-1] if "." in file_name else ""
+        if ext in ("pdf",):
+            file_content = extract_text_from_pdf(local_path)
+            content_type_desc = "PDF文档"
+        elif ext in ("png", "jpg", "jpeg", "gif", "webp", "bmp"):
+            # 图片文件 → 用OCR
+            ocr_result = json.loads(ocr_image(local_path))
+            file_content = ocr_result.get("text", "") if ocr_result.get("success") else "(OCR失败)"
+            content_type_desc = "图片"
+        else:
+            file_content = f"(不支持的文件类型: .{ext}，请上传PDF或图片)"
+            content_type_desc = "未知类型"
+
+        # 截断过长内容
+        if len(file_content) > 6000:
+            file_content = file_content[:6000] + "\n\n[... 内容过长，已截断为前6000字符 ...]"
+
+        result = run(
+            f"[系统上下文：飞书用户 sender_open_id={sender_id}, {target_desc}]\n"
+            f"用户上传了一个{content_type_desc}文件：'{file_name}'。\n\n"
+            f"═══════════════════════════════════════\n"
+            f"【文件内容】（已提取）\n"
+            f"═══════════════════════════════════════\n"
+            f"{file_content}\n\n"
+            f"═══════════════════════════════════════\n"
+            f"请判断这个文件的用途：\n"
+            f"- 如果是教材/课本/教学大纲（文件名或内容含教材、课本、目录、知识点等）→ 提取知识体系，更新 data/knowledge_map.json，然后告知用户已完成\n"
+            f"- 如果是作业/题目/试卷 → 按批改流程处理\n"
+            f"- 如果是其他内容 → 友好回复说明\n"
+            f"处理完用 send_feishu(receive_id=\"{reply_target}\", ...) 发送结果。",
+            init_new_session(),
+        )
+        print(f"[INFO] 文件处理完成: {result[:100] if result else 'None'}")
     else:
         result = run(
             f"[系统上下文：飞书用户 sender_open_id={sender_id}, {target_desc}]\n"
             f"学生发来消息：{text}\n\n"
             f"请根据消息内容自主判断和处理：\n"
             f"- 如果是答题（如'第1题答案是...'）→ 批改\n"
-            f"- 如果是家长调参指令（如'调整难度'、'查看学习报告'）→ 先验证密码再执行\n"
+            f"- 如果是家长调参指令（如'调整难度'、'更换教材'、'调整年级'、'查看学习报告'）→ 先验证密码再执行\n"
+            f"- 如果是教材/年级变更指令（如'更换教材为人教版四下'、'调整年级为四年级'）→ 需密码验证，验证后更新 adjustments.json 的 course 配置，并告知家长上传教材目录文件\n"
             f"- 如果是普通对话 → 友好回复\n"
             f"处理完用 send_feishu(receive_id=\"{reply_target}\", ...) 发送结果。",
             session,
@@ -365,6 +420,12 @@ def admin_init():
         "schedule": {
             "push_time": CFG.get("education", {}).get("push_time", "09:00"),
             "friday_3days": True,
+        },
+        "course": {
+            "textbook": "北师大版",
+            "grade": "三年级下学期",
+            "math_subject": "数学",
+            "english_subject": "英语KET",
         },
     }
     adj_file = DATA_DIR / "adjustments.json"
