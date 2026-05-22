@@ -1,31 +1,8 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-dist/
-build/
-
-# Virtualenv
-venv/
-.venv/
-
-# Environment (contains secrets - NEVER commit!)
 .env
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
 .DS_Store
-Thumbs.db
-
-# Runtime data
-data/sessions/
-data/workspace/
-data/images/
-*.jsonl
-data/today_questions.json
-data/learning_log.json
+workspace/

@@ -1,47 +1,162 @@
 #!/bin/bash
+# ============================================
+# 小肥猫学习助手 v2.0 — 一键部署脚本
+# 自动完成: 虚拟环境、依赖安装、systemd配置、服务启动
+# 用法: bash deploy.sh [--no-systemd]
+# ============================================
 set -e
 
-echo "🐱 小肥猫学习助手 v2.0 — 部署开始"
-echo "================================"
+RED='\033[31m'
+GREEN='\033[32m'
+YELLOW='\033[33m'
+BLUE='\033[36m'
+NC='\033[0m'
 
+info()  { echo -e "${BLUE}[INFO]${NC} $1"; }
+ok()    { echo -e "${GREEN}[OK]${NC} $1"; }
+warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
+err()   { echo -e "${RED}[ERROR]${NC} $1"; }
+
+NO_SYSTEMD=false
+if [ "$1" = "--no-systemd" ]; then
+    NO_SYSTEMD=true
+fi
+
+echo ""
+echo "========================================="
+echo "  小肥猫学习助手 v2.0 - 生产部署"
+echo "  $(date '+%Y-%m-%d %H:%M:%S')"
+echo "========================================="
+echo ""
+
+# 检查是否为 root（systemd 安装需要）
+if [ "$NO_SYSTEMD" = false ] && [ "$EUID" -ne 0 ]; then
+    warn "非 root 用户运行，将跳过 systemd 服务安装"
+    NO_SYSTEMD=true
+fi
+
+# ---- Python 检查 ----
+info "检查 Python..."
 PYTHON=$(which python3 2>/dev/null || which python 2>/dev/null)
 if [ -z "$PYTHON" ]; then
-    echo "❌ 未找到 Python3"
+    err "未找到 Python3，请先安装: sudo apt-get install python3"
     exit 1
 fi
-echo "✅ Python: $($PYTHON --version 2>&1)"
+ok "Python: $($PYTHON --version 2>&1)"
 
-# 虚拟环境
-if [ ! -d "venv" ]; then
-    $PYTHON -m venv venv
-fi
-source venv/bin/activate
-pip install -r requirements.txt -q
-
-# OCR引擎
+# ---- 系统依赖 ----
+info "检查 tesseract-ocr..."
 if ! command -v tesseract &> /dev/null; then
-    echo "⚠️  安装 tesseract-ocr..."
+    warn "未安装 tesseract-ocr，正在安装..."
     if command -v apt-get &> /dev/null; then
-        sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng
     elif command -v yum &> /dev/null; then
         sudo yum install -y tesseract tesseract-langpack-chi-sim
+    else
+        warn "无法自动安装 tesseract，请手动安装"
+    fi
+    ok "tesseract 安装完成"
+else
+    ok "tesseract 已安装"
+fi
+
+# ---- 虚拟环境 ----
+VENV_DIR="/opt/venv"
+info "设置虚拟环境..."
+
+if [ ! -d "$VENV_DIR" ]; then
+    if [ "$EUID" -eq 0 ]; then
+        $PYTHON -m venv "$VENV_DIR"
+    else
+        VENV_DIR="$(pwd)/venv"
+        $PYTHON -m venv "$VENV_DIR"
+        warn "非 root 用户，虚拟环境创建在项目目录: $VENV_DIR"
+    fi
+fi
+source "$VENV_DIR/bin/activate"
+ok "虚拟环境: $VENV_DIR"
+
+# ---- Python 依赖 ----
+info "安装 Python 依赖..."
+pip install --upgrade pip -q
+pip install -r requirements.txt -q
+ok "Python 依赖安装完成"
+
+# ---- 数据目录 ----
+info "创建数据目录..."
+mkdir -p data/sessions data/workspace data/notes data/images
+ok "数据目录就绪"
+
+# ---- .env 检查 ----
+info "检查 .env 配置文件..."
+if [ ! -f ".env" ]; then
+    if [ -f ".env.example" ]; then
+        cp .env.example .env
+        warn ".env 已从 .env.example 创建，请编辑填入真实密钥！"
+        warn "  vim .env"
+        exit 1
+    else
+        err ".env 文件不存在，且无 .env.example 模板"
+        exit 1
     fi
 else
-    echo "✅ tesseract 已安装"
+    ok ".env 文件已存在"
 fi
 
-mkdir -p data/sessions data/workspace data/images
-
-# .env检查
-if [ ! -f ".env" ]; then
-    cp .env.example .env
-    echo "⚠️  请编辑 .env 填入飞书凭证"
-    exit 1
+# ---- systemd 服务 ----
+if [ "$NO_SYSTEMD" = false ]; then
+    info "安装 systemd 服务..."
+    
+    # 调整 service 文件中的路径
+    SERVICE_FILE="cat-learning.service"
+    if [ -f "$SERVICE_FILE" ]; then
+        WORKDIR=$(pwd)
+        sed -i "s|WorkingDirectory=.*|WorkingDirectory=$WORKDIR|" "$SERVICE_FILE"
+        sed -i "s|ExecStart=.*|ExecStart=$VENV_DIR/bin/gunicorn server:app --bind 0.0.0.0:8192 --workers 2 --timeout 120 --daemon --access-logfile /var/log/cat-learning.log --error-logfile /var/log/cat-learning.log|" "$SERVICE_FILE"
+    fi
+    
+    cp "$SERVICE_FILE" /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable cat-learning
+    ok "systemd 服务已安装并设为开机自启"
+    
+    # 重启服务
+    info "启动/重启服务..."
+    systemctl restart cat-learning || systemctl start cat-learning
+    sleep 2
+    
+    if systemctl is-active --quiet cat-learning; then
+        ok "服务启动成功"
+    else
+        err "服务启动失败，查看日志: sudo journalctl -u cat-learning -n 20"
+        echo ""
+        systemctl status cat-learning --no-pager -l || true
+        echo ""
+        warn "尝试手动启动排查问题:"
+        echo "  source $VENV_DIR/bin/activate"
+        echo "  cd $(pwd)"
+        echo "  gunicorn server:app --bind 0.0.0.0:8192 --workers 2"
+        exit 1
+    fi
+else
+    # 无 systemd，尝试直接前台启动
+    warn "跳过 systemd 安装，尝试直接启动 gunicorn..."
+    echo ""
+    info "启动命令:"
+    echo "  $VENV_DIR/bin/gunicorn server:app --bind 0.0.0.0:8192 --workers 2 --timeout 120 --access-logfile - --error-logfile -"
+    echo ""
 fi
 
 echo ""
-echo "🚀 启动服务（端口 8192）"
-echo "   飞书事件端点: http://YOUR_IP:8192/feishu/event"
+echo "========================================="
+echo "  部署完成！"
+echo "========================================="
 echo ""
-
-gunicorn server:app --bind 0.0.0.0:8192 --workers 2 --timeout 120 --access-logfile - --error-logfile -
+echo "  健康检查: curl http://localhost:8192/health"
+echo "  测试脚本: bash test.sh"
+echo "  查看日志: sudo journalctl -u cat-learning -f"
+echo "  应用日志: tail -f /var/log/cat-learning.log"
+echo ""
+echo "  飞书回调地址: http://$(hostname -I | awk '{print $1}'):8192/feishu/event"
+echo ""
