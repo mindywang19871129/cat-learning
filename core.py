@@ -253,48 +253,47 @@ OCR_SPACE_API_KEY = os.environ.get("OCR_SPACE_API_KEY", "")
 
 
 def _recognize_via_feishu(p: Path) -> dict | None:
-    """飞书OCR：先试JSON base64格式，再试multipart。返回结果或None。"""
+    """飞书OCR API：JSON base64格式（官方协议）。
+    返回 {"raw_lines": [...]} 或 None。
+    API文档：POST /optical_char_recognition/v1/image/basic_recognize
+            Body: {"image": "<base64>"}
+            返回: {"code":0, "data":{"text_list":["行1","行2"]}}
+    """
     import requests
     token = _get_feishu_token()
     if not token:
         return None
 
-    # 策略1: JSON base64（某些版本飞书API需要这种格式）
     try:
         with open(str(p), "rb") as f:
             img_b64 = base64.b64encode(f.read()).decode()
+
         resp = requests.post(
             f"{FEISHU_BASE}/optical_char_recognition/v1/image/basic_recognize",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json; charset=utf-8",
+            },
             json={"image": img_b64},
             timeout=30,
         )
-        if resp.status_code == 200 and resp.json().get("code") == 0:
-            data = resp.json()
-            raw_lines = data.get("data", {}).get("text_lines", [])
-            if raw_lines:
-                return {"raw_lines": raw_lines}
-    except Exception:
-        pass
 
-    # 策略2: multipart form-data
-    try:
-        with open(str(p), "rb") as img_file:
-            resp = requests.post(
-                f"{FEISHU_BASE}/optical_char_recognition/v1/image/basic_recognize",
-                headers={"Authorization": f"Bearer {token}"},
-                files={"image": (p.name, img_file, "application/octet-stream")},
-                timeout=30,
-            )
-        if resp.status_code == 200 and resp.json().get("code") == 0:
-            data = resp.json()
-            raw_lines = data.get("data", {}).get("text_lines", [])
-            if raw_lines:
-                return {"raw_lines": raw_lines}
-    except Exception:
-        pass
+        if resp.status_code != 200:
+            return None
 
-    return None
+        data = resp.json()
+        code = data.get("code", -1)
+        if code != 0:
+            # 9499=权限不足, 1150101=参数错误, 1150102=服务异常
+            return None
+
+        # API 返回字段是 text_list（不是 text_lines）
+        raw_lines = data.get("data", {}).get("text_list", [])
+        if raw_lines:
+            return {"raw_lines": raw_lines}
+        return None
+    except Exception:
+        return None
 
 
 def _recognize_via_ocrspace(p: Path) -> dict | None:
