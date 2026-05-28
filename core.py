@@ -62,9 +62,10 @@ with open(HOME / "config.toml", "rb") as _f:
 
 MODEL = CFG["api"]["model"]
 BASE_URL = CFG["api"]["base_url"]
-API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+# API Key: 优先用 ARK_API_KEY（火山方舟），兼容 DEEPSEEK_API_KEY
+API_KEY = os.environ.get("ARK_API_KEY", "") or os.environ.get("DEEPSEEK_API_KEY", "")
 if not API_KEY:
-    sys.stderr.write("ERROR: DEEPSEEK_API_KEY not set (check .env)\n")
+    sys.stderr.write("ERROR: ARK_API_KEY or DEEPSEEK_API_KEY not set (check .env)\n")
     sys.exit(1)
 
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
@@ -202,7 +203,7 @@ def call_llm(prompt: str, system: str = "") -> str:
 # ─── 工具 8：联网搜索 ───────────────────────────────────────────────
 
 def web_search(query: str, max_results: int = 5) -> str:
-    """联网搜索最新信息。优先用 DeepSeek 联网能力，降级到 Tavily。"""
+    """联网搜索最新信息。优先用 LLM 联网能力，降级到 Tavily。"""
     try:
         resp = CLIENT.chat.completions.create(
             model=MODEL,
@@ -219,7 +220,7 @@ def web_search(query: str, max_results: int = 5) -> str:
         pass
 
     if not TAVILY_API_KEY:
-        return "ERROR: 联网搜索不可用（DeepSeek不支持 + TAVILY_API_KEY未设置）"
+        return "ERROR: 联网搜索不可用（LLM不支持 + TAVILY_API_KEY未设置）"
 
     payload = json.dumps({
         "api_key": TAVILY_API_KEY,

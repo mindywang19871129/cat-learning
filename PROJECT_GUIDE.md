@@ -1,17 +1,17 @@
-# 🐱 小肥猫学习助手 v2.7 — 项目完整手册
+# 🐱 小肥猫学习助手 v2.8 — 项目完整手册
 
-> 最后更新：2026-05-22 17:11 | 工作空间：`/Users/mindy/CodeBuddy/20260521173149/cat-learning`
+> 最后更新：2026-05-28 17:17 | 工作空间：`/Users/mindy/CodeBuddy/20260521173149/cat-learning`
 > GitHub: `git@github.com:mindywang19871129/cat-learning.git`
 >
 > **变更记录**：见 Git 提交历史。每次变更同步更新本文档。
 >
-> **当前部署状态**：代码 v2.7 | DeepSeek ✅ | 飞书 ✅ | OCR.space ✅ | 家长密码 ✅ | 📚联网搜教材 | 🔬错题本分析 | 🎯飞书动态调整 | 📖 KET备考体系(v2.6) | 🎉 全链路就绪
+> **当前部署状态**：代码 v2.8 | 火山方舟 DeepSeek V4 Pro ✅ | 飞书 ✅ | OCR.space ✅ | 家长密码 ✅ | 📚联网搜教材 | 🔬错题本分析 | 🎯飞书动态调整 | 📖 KET备考体系(v2.6) | 🎉 全链路就绪
 
 ---
 
 ## 一、项目概览
 
-**小肥猫学习助手**是一个基于 LLM Agent 的小学生 AI 辅导系统，通过**飞书机器人**与家长/学生交互。核心能力是：DeepSeek LLM 驱动出题 + 飞书云端 OCR 批改手写答案 + 艾宾浩斯记忆曲线错题管理。
+**小肥猫学习助手**是一个基于 LLM Agent 的小学生 AI 辅导系统，通过**飞书机器人**与家长/学生交互。核心能力是：火山方舟 DeepSeek V4 Pro 驱动出题 + 飞书云端 OCR 批改手写答案 + 艾宾浩斯记忆曲线错题管理。
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -85,9 +85,9 @@
 │                    外部 API 依赖                                 │
 │                                                                   │
 │  ┌──────────────────┐  ┌──────────────────────────┐                      │
-│  │ DeepSeek API      │  │ OCR.space (推荐备用)      │                     │
-│  │ api.deepseek.com  │  │ api.ocr.space            │                     │
-│  │ 需 DEEPSEEK_API_KEY│  │ 需 OCR_SPACE_API_KEY     │                     │
+│  │ 火山方舟 API       │  │ OCR.space (推荐备用)      │                     │
+│  │ ark.cn-beijing... │  │ api.ocr.space            │                     │
+│  │ 需 ARK_API_KEY    │  │ 需 OCR_SPACE_API_KEY     │                     │
 │  └──────────────────┘  │ 免费 25000次/月 ✨        │                     │
 │                        └──────────────────────────┘                     │
 │                                                                   │
@@ -134,7 +134,7 @@
 
 | 能力 | 说明 |
 |------|------|
-| 🧠 **LLM Agent Loop** | DeepSeek 驱动，最多30轮工具调用自主完成任务 |
+| 🧠 **LLM Agent Loop** | 火山方舟 DeepSeek V4 Pro 驱动，最多30轮工具调用自主完成任务 |
 | 🛡️ **Python层前置拦截** | 发题/定时推送前由Python代码快速检查完成状态，不依赖LLM，保证必有回复 |
 | 🔧 **10个内置工具** | read_file/write_file/call_llm/ocr_image/send_feishu... |
 | 📡 **消息轮询模式** | 内网无公网IP，服务器主动拉取飞书聊天消息 |
@@ -155,7 +155,8 @@
 
 | Token | 用途 | 获取方式 | 失效影响 |
 |-------|------|---------|---------|
-| **DEEPSEEK_API_KEY** | 🔴 核心：LLM出题/批改/对话 | [platform.deepseek.com](https://platform.deepseek.com) 注册获取 | **整个系统不可用** |
+| **ARK_API_KEY** | 🔴 核心：LLM出题/批改/对话 | [火山方舟控制台](https://console.volcengine.com/ark) 创建 API Key | **整个系统不可用** |
+| **DEEPSEEK_API_KEY** | 🟡 兼容：旧版 DeepSeek API（ARK_API_KEY 未设置时使用） | [platform.deepseek.com](https://platform.deepseek.com) 注册获取 | 降级备用 |
 | **FEISHU_APP_ID** | 🔴 核心：飞书API认证 | [open.feishu.cn](https://open.feishu.cn) 创建企业自建应用 | 无法收发飞书消息 |
 | **FEISHU_APP_SECRET** | 🔴 核心：飞书API密钥 | 同上，应用凭证页面 | 无法收发飞书消息 |
 
@@ -190,7 +191,7 @@
 
 | 包 | 用途 |
 |----|------|
-| `openai>=1.0.0` | DeepSeek API调用 |
+| `openai>=1.0.0` | 火山方舟 API 调用（兼容 OpenAI SDK） |
 | `flask>=3.0.0` | Web服务器 |
 | `gunicorn>=21.0.0` | 生产级WSGI |
 | `apscheduler>=3.10.0` | 定时任务(每日出题/消息轮询) |
@@ -202,15 +203,15 @@
 
 ```
 cat-learning 可用性 = 
-    DEEPSEEK_API_KEY 有效 
+    ARK_API_KEY 有效（或 DEEPSEEK_API_KEY 兼容）
     AND FEISHU_APP_ID+SECRET 有效 
     AND 飞书权限(im:message + optical_char_recognition) 已开通
-    AND 服务器网络能访问 api.deepseek.com + open.feishu.cn
+    AND 服务器网络能访问 ark.cn-beijing.volces.com + open.feishu.cn
     AND Python 3.10+
 
 降级路径:
     飞书OCR频率限制(99991400) → 5次退避重试(10s递增) → 仍失败 → OCR.space (需 OCR_SPACE_API_KEY) → 均失败 → 提示用户
-    DeepSeek搜索失败 → Tavily (需 TAVILY_API_KEY)
+    火山方舟搜索失败 → Tavily (需 TAVILY_API_KEY)
     事件回调不可用 → 轮询模式 (内网默认)
 ```
 
@@ -531,7 +532,7 @@ cd /opt/cat-learning
 gunicorn server:app --bind 0.0.0.0:8192 --workers 2
 
 # 3. 常见原因
-# - .env 不存在或 DEEPSEEK_API_KEY 未设置
+# - .env 不存在或 ARK_API_KEY/DEEPSEEK_API_KEY 未设置
 # - Python依赖未安装: pip install -r requirements.txt
 # - 端口被占用: lsof -i :8192
 ```
@@ -594,15 +595,15 @@ print(json.dumps(r, ensure_ascii=False, indent=2))
 3. 重启服务：`systemctl restart cat-learning`
 4. 此后飞书OCR限流时自动降级到 OCR.space（每月25000次免费）
 
-### 7.4 DeepSeek API 不通
+### 7.4 火山方舟 API 不通
 
 ```bash
-# 测试 API Key
-curl -s https://api.deepseek.com/v1/models \
-  -H "Authorization: Bearer $DEEPSEEK_API_KEY" | python3 -m json.tool
+# 测试 API Key（火山方舟）
+curl -s https://ark.cn-beijing.volces.com/api/v3/models \
+  -H "Authorization: Bearer $ARK_API_KEY" | python3 -m json.tool
 
 # 如果返回 401: API Key 无效或过期
-# 如果超时: 检查服务器能否访问 api.deepseek.com
+# 如果超时: 检查服务器能否访问 ark.cn-beijing.volces.com
 # 如果返回模型列表: 正常
 ```
 
@@ -614,7 +615,7 @@ tail -50 /var/log/cat-learning.log
 
 # 常见原因:
 # - data/ 目录下缺少 knowledge_map.json 等基础数据文件
-# - DeepSeek API 余额不足
+# - 火山方舟 API 余额不足
 # - LLM调用超时 (检查网络延迟)
 ```
 
@@ -674,14 +675,14 @@ else:
     print(f'错误: {r.get(\"error\",\"\")}')
 "
 
-# 测试4: DeepSeek API连通
+# 测试4: 火山方舟 API连通
 echo ""
-echo "=== 测试4: DeepSeek API ==="
+echo "=== 测试4: 火山方舟 API ==="
 python3 -c "
 import sys; sys.path.insert(0,'/opt/cat-learning')
 from core import call_llm
 r = call_llm('请回复：API测试成功')
-print(f'DeepSeek回复: {r[:80]}')
+print(f'LLM回复: {r[:80]}')
 print('✅ LLM API正常' if '成功' in r else '⚠️ LLM回复异常')
 " 2>&1
 
@@ -698,7 +699,7 @@ echo "========================================="
 | 健康检查 | `"status":"ok"` | `journalctl -u cat-learning -n 20` |
 | 飞书Token | ✅ 成功 | 检查 .env 的 APP_ID/SECRET |
 | 飞书OCR | `engine: feishu_ocr, success: True` | 开通权限+发布版本+`text_list`字段 |
-| DeepSeek | 返回"API测试成功" | 检查 DEEPSEEK_API_KEY 和余额 |
+| 火山方舟 | 返回"API测试成功" | 检查 ARK_API_KEY 和余额 |
 
 ### 8.3 端到端飞书测试
 
