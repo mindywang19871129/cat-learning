@@ -56,15 +56,12 @@ echo "━━━ 第二步：API Token ━━━"
 
 source /opt/venv/bin/activate 2>/dev/null || true
 
-info "2.1 火山方舟 API Key"
-ARK_KEY=$(grep ARK_API_KEY /opt/cat-learning/.env 2>/dev/null | cut -d= -f2 | tr -d ' ')
+info "2.1 DeepSeek API Key"
 DS_KEY=$(grep DEEPSEEK_API_KEY /opt/cat-learning/.env 2>/dev/null | cut -d= -f2 | tr -d ' ')
-if [ -n "$ARK_KEY" ] && [ "$ARK_KEY" != "你的火山方舟API_Key" ]; then
-    pass "ARK_API_KEY 已配置（火山方舟）"
-elif [ -n "$DS_KEY" ] && [ "$DS_KEY" != "你的DeepSeek_API_Key" ]; then
-    pass "DEEPSEEK_API_KEY 已配置（兼容模式）"
+if [ -n "$DS_KEY" ] && [ "$DS_KEY" != "你的DeepSeek_API_Key" ]; then
+    pass "DEEPSEEK_API_KEY 已配置"
 else
-    fail "ARK_API_KEY 和 DEEPSEEK_API_KEY 均未配置或为默认值"
+    fail "DEEPSEEK_API_KEY 未配置或为默认值"
 fi
 
 info "2.2 飞书 App ID"
@@ -134,11 +131,11 @@ else
     echo "    详细结果: $OCR_RESULT"
 fi
 
-# ─── 5. 火山方舟 LLM 测试 ───
+# ─── 5. DeepSeek LLM 测试 ───
 echo ""
 echo "━━━ 第五步：LLM API ━━━"
 
-info "5.1 火山方舟调用"
+info "5.1 DeepSeek调用"
 LLM_RESULT=$(python3 -c "
 import sys; sys.path.insert(0,'/opt/cat-learning')
 from core import call_llm

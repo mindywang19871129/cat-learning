@@ -62,10 +62,9 @@ with open(HOME / "config.toml", "rb") as _f:
 
 MODEL = CFG["api"]["model"]
 BASE_URL = CFG["api"]["base_url"]
-# API Key: 优先用 ARK_API_KEY（火山方舟），兼容 DEEPSEEK_API_KEY
-API_KEY = os.environ.get("ARK_API_KEY", "") or os.environ.get("DEEPSEEK_API_KEY", "")
+API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 if not API_KEY:
-    sys.stderr.write("ERROR: ARK_API_KEY or DEEPSEEK_API_KEY not set (check .env)\n")
+    sys.stderr.write("ERROR: DEEPSEEK_API_KEY not set (check .env)\n")
     sys.exit(1)
 
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")

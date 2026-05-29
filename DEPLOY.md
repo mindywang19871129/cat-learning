@@ -28,9 +28,6 @@ cd cat-learning
 
 ```bash
 cat > .env << 'EOF'
-# 火山方舟 API Key（推荐，火山方舟控制台 → API Key 管理 → 创建）
-ARK_API_KEY=你的火山方舟API_Key
-# 兼容旧版 DeepSeek API Key
 DEEPSEEK_API_KEY=你的DeepSeek_API_Key
 FEISHU_APP_ID=你的飞书App_ID
 FEISHU_APP_SECRET=你的飞书App_Secret
