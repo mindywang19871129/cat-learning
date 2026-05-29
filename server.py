@@ -97,6 +97,10 @@ def _can_scheduled_push_today():
     all_q = math + english
     total = len(all_q)
 
+    # 日期为空/None → 旧题作废
+    if not file_date:
+        return True, "题目文件日期缺失，按旧题作废处理"
+
     # 文件日期是今天 → 已推送过
     if file_date == today_str:
         if total == 0:
@@ -280,8 +284,11 @@ def _handle_feishu_event(event: dict):
 
 def _log(msg: str):
     """立即写入日志（解决 gunicorn 子线程 stdout 缓冲问题）。"""
-    sys.stdout.write(f"{msg}\n")
+    line = f"{msg}\n"
+    sys.stdout.write(line)
     sys.stdout.flush()
+    sys.stderr.write(line)
+    sys.stderr.flush()
 
 
 def scheduled_daily_push():
@@ -670,12 +677,32 @@ def health():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# 主入口
+# 调度器自动启动（gunicorn --preload 模式在主进程中执行）
+# ══════════════════════════════════════════════════════════════════════
+
+_SCHEDULER_STARTED = False
+
+def _auto_start_scheduler():
+    """模块加载时自动启动调度器（gunicorn --preload 在主进程执行，worker 不重复）。"""
+    global _SCHEDULER_STARTED
+    if _SCHEDULER_STARTED:
+        return
+    _SCHEDULER_STARTED = True
+    try:
+        start_scheduler()
+        _log("[INIT] 调度器已自动启动（轮询 + 每日推送）")
+    except Exception as e:
+        _log(f"[INIT] 调度器启动失败: {e}")
+
+_auto_start_scheduler()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 主入口（仅 python server.py 直接运行时使用）
 # ══════════════════════════════════════════════════════════════════════
 
 def main():
     port = CFG.get("runtime", {}).get("server_port", 8192)
-    start_scheduler()
     print(f"\n🐱 小肥猫学习助手 v2.0 启动")
     print(f"   端口: {port}")
     print(f"   飞书事件: http://0.0.0.0:{port}/feishu/event")
