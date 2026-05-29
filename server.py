@@ -636,6 +636,30 @@ def manual_push_trigger():
     return jsonify({"code": 0, "msg": "已触发每日推送，正在后台执行..."})
 
 
+@app.route("/test_push", methods=["GET"])
+def test_push():
+    """测试：直接发送一条飞书消息到轮询聊天，验证飞书通道。"""
+    poll_cfg = CFG.get("feishu", {}).get("poll", {})
+    chat_ids = poll_cfg.get("chat_ids", [])
+    if not chat_ids:
+        return jsonify({"code": -1, "msg": "未配置 chat_ids"})
+    results = []
+    for cid in chat_ids:
+        r = send_feishu(receive_id=cid, msg_type="text", content="🐱 小肥猫测试消息：飞书通道正常！如果你看到这条消息，说明服务运行正常。")
+        results.append({"chat_id": cid, "result": r})
+    return jsonify({"code": 0, "results": results})
+
+
+@app.route("/clear_today", methods=["POST"])
+def clear_today():
+    """清理 today_questions.json（解决旧题阻塞问题）。"""
+    today_file = DATA_DIR / "today_questions.json"
+    if today_file.exists():
+        today_file.unlink()
+        return jsonify({"code": 0, "msg": "已清理 today_questions.json"})
+    return jsonify({"code": 0, "msg": "文件不存在，无需清理"})
+
+
 @app.route("/feishu/config", methods=["GET", "POST"])
 def feishu_config():
     """查看/配置轮询的聊天ID。"""

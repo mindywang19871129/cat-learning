@@ -523,9 +523,13 @@ def send_feishu(receive_id: str, msg_type: str, content: str) -> str:
         )
         data = resp.json()
         if data.get("code") == 0:
-            return f"OK: 飞书消息已发送 (message_id={data.get('data',{}).get('message_id','')})"
+            msg_id = data.get('data',{}).get('message_id','')
+            print(f"[FEISHU_SEND] ✅ 消息已发送: receive_id={receive_id[:16]}... msg_id={msg_id[:16]}...")
+            return f"OK: 飞书消息已发送 (message_id={msg_id})"
+        print(f"[FEISHU_SEND] ❌ 发送失败: code={data.get('code')} msg={data.get('msg','')}")
         return f"ERROR: 飞书发送失败 code={data.get('code')} msg={data.get('msg','')}"
     except Exception as e:
+        print(f"[FEISHU_SEND] ❌ 异常: {e}")
         return f"ERROR: 飞书发送异常: {e}"
 
 
