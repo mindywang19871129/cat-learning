@@ -41,10 +41,10 @@
 ```json
 {
   "question_id": "M20260514_03",
-  "error_dates": ["2026-05-14", "2026-05-16"],
-  "review_dates": ["2026-05-15", "2026-05-18", "2026-05-22"],
+  "error_dates": ["YYYY-MM-DD", "YYYY-MM-DD"],
+  "review_dates": ["YYYY-MM-DD", "YYYY-MM-DD", "YYYY-MM-DD"],
   "current_review_count": 2,
-  "next_review_date": "2026-05-29"
+  "next_review_date": "YYYY-MM-DD（当天日期）"
 }
 ```
 

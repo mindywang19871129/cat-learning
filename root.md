@@ -218,9 +218,9 @@
        "error_type": "计算粗心",
        "error_root_cause": "进位后忘记加进位的1",
        "related_topic_id": "math-1-2",
-       "date": "2026-05-22",
+       "date": "YYYY-MM-DD（当天日期）",
        "review_count": 0,
-       "next_review": "2026-05-23",
+       "next_review": "YYYY-MM-DD（次日）",
        "variant_practice": "变式练习题"
      }
    ]
@@ -419,7 +419,7 @@
   "difficulty_bias": "easy",
   "math_daily_count": 4,
   "english_daily_count": 4,
-  "temp_boost": {"topic_id": "math-1-2", "extra_count": 3, "expires": "2026-05-23"}
+  "temp_boost": {"topic_id": "math-1-2", "extra_count": 3, "expires": "YYYY-MM-DD（当天）"}
 }
 ```
 
