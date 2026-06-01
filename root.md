@@ -124,7 +124,8 @@
 | `adjustments.json` | 家长调参（题数/难度/密码/教材/年级） | 出题/执行家长指令前 |
 | `grading_rules.json` | 10条批改规则 | 批改前 |
 | `ket_plan.md` | KET 108天备考计划 | 英语出题/模考前 |
-| `today_questions.json` | 今日题目 | 批改时查找题目 |
+| `today_questions.json` | 今日题目 | 批改时查找今日题目 |
+| `questions/questions_YYYY-MM-DD.json` | 历史题目存档（按日期） | 学生答老题时查找 |
 
 ### 关键流程
 
@@ -141,19 +142,23 @@
 ④ 读 knowledge_map.json → 了解当前学期范围
 ⑤ 用 call_llm 生成题目（包含数学+英语，按要求混合）
 ⑥ 用 write_file 存入 data/today_questions.json
-⑦ 用 send_feishu 发卡片消息推送
+⑦ ⚠️ 同时用 write_file 存入 data/questions/questions_YYYY-MM-DD.json（归档！方便后续查找历史题目）
+⑧ 用 send_feishu 发卡片消息推送
 ```
 
 **2. 批改答案**
 ```
-① 读 today_questions.json 找到对应题目和标准答案
-② 读 grading_rules.json 了解批改标准
-③ 用 call_llm 批改（判断对错+给出引导+评分）
-④ 用 edit_file 更新 mastery.json（只改对应知识点那一项，不要用 write_file 重写整个文件）
-⑤ 如答错 → 用 write_file 追加到 error_book.json
-⑥ 用 send_feishu 发批改结果卡片
+① ⚠️ 先判断日期：学生说「29号第1题答案是XX」→ find_questions(date_hint="29号") 查找历史题目
+   只说「第1题」没提日期 → 先读 today_questions.json，找不到再 find_questions() 查所有存档
+② 找到对应题目和标准答案后开始批改
+③ 读 grading_rules.json 了解批改标准
+④ 用 call_llm 批改（判断对错+给出引导+评分）
+⑤ 用 edit_file 更新 mastery.json（只改对应知识点那一项，不要用 write_file 重写整个文件）
+⑥ 如答错 → 用 write_file 追加到 error_book.json
+⑦ 用 send_feishu 发批改结果卡片
 
 ⚠️ 更新 mastery.json 务必用 edit_file 精确替换，不要用 write_file 全量覆盖！
+⚠️ 学生可能隔天回复老题，优先用 find_questions 按日期查找，不要假设是今天的题目！
 
 **批改回复格式要求（非常重要）：**
 - 逐个题目回复，格式：❌/✅ 第X题 + 你的答案 + 判定 + 解析
@@ -464,6 +469,7 @@ send_feishu(receive_id="ou_xxx", msg_type="interactive", content='{"config":{"wi
 | `write_file` | 保存题目、更新掌握度、追加错题 |
 | `call_llm` | 生成题目、批改答案、生成模考、分析报告（隔离子任务） |
 | `ocr_image` | 识别拍照图片 |
+| `find_questions` | **批改前按日期查找对应题目**（学生说"29号"时必调） |
 | `send_feishu` | 推送结果给用户 |
 | `web_search` | 联网搜索最新题库或教育方法 |
 | `list_dir` | 查看有哪些文件 |

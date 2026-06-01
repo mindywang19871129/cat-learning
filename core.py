@@ -440,7 +440,268 @@ def ocr_image(image_path: str) -> str:
     }, ensure_ascii=False)
 
 
-# ─── 工具 10：飞书消息发送 ──────────────────────────────────────────
+# ─── 工具 10：LLM视觉识别（多API支持）────────────────────────────
+
+# 视觉API配置（按优先级尝试）
+VISION_APIS = []
+
+# 1. 硅基流动（免费，支持Qwen-VL等视觉模型）
+SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "")
+if SILICONFLOW_API_KEY:
+    VISION_APIS.append({
+        "name": "siliconflow",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "api_key": SILICONFLOW_API_KEY,
+        "model": "Qwen/Qwen2.5-VL-72B-Instruct",
+    })
+
+# 2. 火山方舟（支持Doubao-Vision等）
+VOLC_API_KEY = os.environ.get("VOLC_API_KEY", "")
+VOLC_ENDPOINT_ID = os.environ.get("VOLC_ENDPOINT_ID", "")
+if VOLC_API_KEY and VOLC_ENDPOINT_ID:
+    VISION_APIS.append({
+        "name": "volcengine",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "api_key": VOLC_API_KEY,
+        "model": VOLC_ENDPOINT_ID,
+    })
+
+# 3. OpenAI兼容API（如通义千问、智谱等）
+OPENAI_VISION_API_KEY = os.environ.get("OPENAI_VISION_API_KEY", "")
+OPENAI_VISION_BASE_URL = os.environ.get("OPENAI_VISION_BASE_URL", "")
+OPENAI_VISION_MODEL = os.environ.get("OPENAI_VISION_MODEL", "gpt-4o-mini")
+if OPENAI_VISION_API_KEY:
+    VISION_APIS.append({
+        "name": "openai_compatible",
+        "base_url": OPENAI_VISION_BASE_URL or "https://api.openai.com/v1",
+        "api_key": OPENAI_VISION_API_KEY,
+        "model": OPENAI_VISION_MODEL,
+    })
+
+
+def analyze_image_via_llm(image_path: str, prompt: str = "请识别图片中的文字内容") -> str:
+    """
+    使用LLM视觉能力直接分析图片。
+    支持多种视觉API（硅基流动/火山方舟/OpenAI兼容），按优先级尝试。
+    如果所有视觉API都不可用，返回失败（降级到传统OCR+LLM增强）。
+    """
+    p = _resolve(image_path)
+    if not p.exists():
+        return json.dumps({"success": False, "error": f"图片文件不存在: {image_path}"}, ensure_ascii=False)
+    
+    # 检查图片大小
+    file_size = p.stat().st_size
+    if file_size > 10 * 1024 * 1024:
+        return json.dumps({"success": False, "error": "图片超过10MB限制"}, ensure_ascii=False)
+    
+    # 如果没有可用的视觉API，直接返回失败
+    if not VISION_APIS:
+        return json.dumps({
+            "success": False, 
+            "error": "无可用的视觉API（需配置SILICONFLOW_API_KEY或VOLC_API_KEY），将降级到OCR+LLM增强",
+            "engine": "none"
+        }, ensure_ascii=False)
+    
+    try:
+        with open(str(p), "rb") as f:
+            image_data = f.read()
+        image_b64 = base64.b64encode(image_data).decode()
+    except Exception as e:
+        return json.dumps({"success": False, "error": f"读取图片失败: {e}"}, ensure_ascii=False)
+    
+    # 按优先级尝试各视觉API
+    errors = []
+    for api_config in VISION_APIS:
+        try:
+            vision_client = OpenAI(api_key=api_config["api_key"], base_url=api_config["base_url"])
+            resp = vision_client.chat.completions.create(
+                model=api_config["model"],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}}
+                        ]
+                    }
+                ],
+                max_tokens=1000,
+            )
+            analysis = resp.choices[0].message.content or ""
+            
+            return json.dumps({
+                "success": True,
+                "engine": f"llm_vision_{api_config['name']}",
+                "analysis": analysis,
+                "text": analysis,
+                "confidence_hint": "high",
+                "raw_lines": [line.strip() for line in analysis.split("\n") if line.strip()],
+            }, ensure_ascii=False)
+        except Exception as e:
+            errors.append(f"{api_config['name']}: {e}")
+            continue
+    
+    return json.dumps({
+        "success": False, 
+        "error": f"所有视觉API均失败: {'; '.join(errors)}",
+        "engine": "none"
+    }, ensure_ascii=False)
+
+
+# ─── 增强的图片识别函数（整合多引擎+LLM视觉+LLM增强）────────────────────────────
+def enhanced_ocr_image(image_path: str, use_llm_vision: bool = True) -> str:
+    """
+    增强的图片识别：优先使用LLM视觉，降级到传统OCR+LLM增强清洗。
+    
+    策略：
+    1. 如果有视觉API → 直接用LLM视觉识别（最准确）
+    2. 如果没有 → 传统OCR + 强化LLM增强清洗（3轮）
+    """
+    # 1. 优先使用LLM视觉（如果可用）
+    if use_llm_vision and VISION_APIS:
+        llm_result = analyze_image_via_llm(image_path, 
+            "请仔细识别图片中的手写文字内容。这是小学生手写的数学/英语答案。"
+            "请逐行输出识别结果，保持原始格式。如果有数学算式，请准确识别数字和运算符号。")
+        llm_data = json.loads(llm_result)
+        if llm_data.get("success"):
+            return llm_result
+    
+    # 2. 降级到传统OCR + 强化LLM增强清洗
+    ocr_result = ocr_image(image_path)
+    ocr_data = json.loads(ocr_result)
+    
+    if not ocr_data.get("success"):
+        return ocr_result  # OCR也失败了，直接返回
+    
+    # 3. 对OCR结果做强化LLM增强清洗（在ocr_image返回前就做一轮）
+    ocr_text = ocr_data.get("text", "")
+    raw_lines = ocr_data.get("raw_lines", [])
+    
+    if ocr_text and len(ocr_text) > 5:
+        try:
+            # 第0轮：LLM智能修正OCR错误
+            correction_prompt = (
+                "以下是OCR识别小学生手写答案的原始结果，识别质量较差，有很多错误。\n"
+                "请根据上下文推断，修正OCR识别错误，输出修正后的文本。\n\n"
+                "常见OCR错误模式：\n"
+                "- 数字混淆：0↔O, 1↔l↔I, 5↔S, 8↔B, 6↔G\n"
+                "- 运算符混淆：×↔x, ÷↔/或+，=↔-或—\n"
+                "- 单位混淆：米↔米，箱↔箱\n"
+                "- 中文数字：三十六=36，六十=60\n"
+                "- 多余/缺失标点符号\n\n"
+                f"原始OCR结果：\n{ocr_text}\n\n"
+                "请输出修正后的文本（只输出修正结果，不要解释）："
+            )
+            corrected = call_llm(correction_prompt)
+            if corrected and len(corrected) > 3:
+                corrected_lines = [line.strip() for line in corrected.split("\n") if line.strip()]
+                ocr_data["text"] = corrected
+                ocr_data["raw_lines"] = corrected_lines
+                ocr_data["line_count"] = len(corrected_lines)
+                ocr_data["llm_corrected"] = True
+                ocr_data["original_ocr_text"] = ocr_text
+                # 提升置信度
+                ocr_data["confidence_hint"] = "medium"
+        except Exception:
+            pass  # LLM增强失败，使用原始OCR结果
+    
+    return json.dumps(ocr_data, ensure_ascii=False)
+
+
+# ─── 工具 10：按日期查找历史题目 ───────────────────────────────────
+
+def find_questions(date_hint: str = "") -> str:
+    """按日期查找题目档案。date_hint 可为 '2026-05-29'/'29号'/'5月29日'/'today'，不传返回所有存档列表。"""
+    questions_dir = DATA_DIR / "questions"
+    questions_dir.mkdir(parents=True, exist_ok=True)
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    files = sorted(questions_dir.glob("questions_*.json"), reverse=True)
+
+    if not files and not (DATA_DIR / "today_questions.json").exists():
+        return json.dumps({"success": False, "error": "没有找到任何题目存档"}, ensure_ascii=False)
+
+    # 列出所有存档
+    all_archives = []
+    for f in files:
+        all_archives.append(f.stem.replace("questions_", ""))
+
+    # 如果没有传 date_hint，返回存档列表
+    if not date_hint:
+        result = {"success": True, "archives": all_archives, "today": today}
+        if (DATA_DIR / "today_questions.json").exists():
+            result["today_file"] = str(DATA_DIR / "today_questions.json")
+        return json.dumps(result, ensure_ascii=False)
+
+    # 解析用户输入的日期提示
+    target_date = None
+    hint = date_hint.strip().lower()
+
+    if hint == "today" or hint == "今天":
+        target_date = today
+    elif hint.startswith("202") and len(hint) >= 10:
+        # 直接是日期格式 2026-05-29
+        target_date = hint[:10]
+    else:
+        # "29号" / "5月29日" / "5.29" 等
+        import re
+        # 匹配 "5月29日" 或 "5.29" 或 "5-29"
+        m = re.search(r'(\d{1,2})\s*[月.\-]\s*(\d{1,2})\s*[日号]?', hint)
+        if m:
+            month, day = int(m.group(1)), int(m.group(2))
+            year = datetime.now().year
+            # 如果月份比当前月份大，可能是去年
+            if month > datetime.now().month:
+                year -= 1
+            target_date = f"{year}-{month:02d}-{day:02d}"
+        else:
+            # 只匹配了日期数字，如 "29"
+            m = re.search(r'(\d{1,2})\s*[日号]', hint)
+            if m:
+                day = int(m.group(1))
+                now = datetime.now()
+                month, year = now.month, now.year
+                # 如果日子在今天之后，说明是上个月（如6月1日说"29号"→5月29日）
+                if day > now.day:
+                    month -= 1
+                    if month == 0:
+                        month = 12
+                        year -= 1
+                target_date = f"{year}-{month:02d}-{day:02d}"
+
+    if not target_date:
+        return json.dumps({
+            "success": False,
+            "error": f"无法解析日期提示 '{date_hint}'，请用 '5月29日' 或 '2026-05-29' 格式",
+            "archives": all_archives,
+        }, ensure_ascii=False)
+
+    # 查找匹配的档案
+    target_file = questions_dir / f"questions_{target_date}.json"
+    if target_file.exists():
+        content = target_file.read_text(encoding="utf-8")
+        try:
+            data = json.loads(content)
+            return json.dumps({
+                "success": True,
+                "date": target_date,
+                "file": str(target_file),
+                "questions": data.get("questions", data if isinstance(data, list) else []),
+            }, ensure_ascii=False)
+        except json.JSONDecodeError:
+            return json.dumps({"success": False, "error": f"题目文件损坏: {target_file}"}, ensure_ascii=False)
+
+    # 没找到，列出相近的
+    nearby = [a for a in all_archives if target_date[:7] in a or target_date[5:7] in a]
+    return json.dumps({
+        "success": False,
+        "date": target_date,
+        "error": f"未找到 {target_date} 的题目存档",
+        "nearby_archives": nearby[:5] if nearby else all_archives[:5],
+    }, ensure_ascii=False)
+
+
+# ─── 工具 11：飞书消息发送 ──────────────────────────────────────────
 
 # 飞书 access_token 缓存
 _feishu_token = {"token": "", "expires_at": 0.0}
@@ -626,7 +887,8 @@ TOOLS = {
     "ask_user": ask_user,
     "call_llm": call_llm,
     "web_search": web_search,
-    "ocr_image": ocr_image,
+    "ocr_image": enhanced_ocr_image,  # 使用增强版
+    "find_questions": find_questions,
     "send_feishu": send_feishu,
 }
 
@@ -676,10 +938,17 @@ TOOL_SCHEMAS = [
     }},
     {"type": "function", "function": {
         "name": "ocr_image",
-        "description": "【纯云端多引擎】识别图片中的文字（支持手写/印刷体）。自动选择飞书OCR或ocr.space免费API。返回JSON：engine/raw_lines/text/confidence_hint(high|medium|low)。对于手写体，confidence通常为medium/low，务必用call_llm做3轮增强清洗（清理噪音→结构化提取→交叉验证）。只调用一次即可，不要重复调用。",
+        "description": "【增强版】识别图片中的文字（优先使用LLM视觉能力，降级到传统OCR）。自动使用LLM视觉分析图片内容，返回更准确的结果。对于手写体答案识别，准确率大幅提升。返回JSON：engine(llm_vision/feishu_ocr/ocrspace)/analysis/text/confidence_hint。务必用call_llm做3轮增强清洗（清理噪音→结构化提取→交叉验证）。只调用一次即可，不要重复调用。",
         "parameters": {"type": "object", "properties": {
             "image_path": {"type": "string", "description": "本地图片文件路径"},
         }, "required": ["image_path"]},
+    }},
+    {"type": "function", "function": {
+        "name": "find_questions",
+        "description": "【按日期查找历史题目】用户说'29号第2题答案'时调用此工具找对应日期的题目。date_hint支持：'2026-05-29'/'29号'/'5月29日'/'5.29'/'today'，不传返回所有存档列表。返回JSON含date/file/questions字段。⚠️ 批改前必须先调用此工具找到正确的题目！",
+        "parameters": {"type": "object", "properties": {
+            "date_hint": {"type": "string", "description": "日期提示，如'29号'/'5月29日'/'2026-05-29'/'today'，不传返回存档列表"},
+        }, "required": []},
     }},
     {"type": "function", "function": {
         "name": "send_feishu",

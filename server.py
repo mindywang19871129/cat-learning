@@ -24,13 +24,82 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from core import (
     init_new_session, run, download_feishu_image,
     download_feishu_file, extract_text_from_pdf,
-    ocr_image, send_feishu,
-    verify_password, DATA_DIR, CFG, HOME as CORE_HOME,
+    ocr_image, send_feishu, find_questions,
+    verify_password, DATA_DIR, CFG, HOME as CORE_HOME, Session
 )
 
 app = Flask(__name__)
 
 FEISHU_VERIFY_TOKEN = os.environ.get("FEISHU_VERIFICATION_TOKEN", "")
+
+# ─── 会话缓存（保持上下文记忆）────────────────────────────
+# 按用户ID缓存会话，避免每次重新初始化
+SESSION_CACHE = {}
+SESSION_TIMEOUT = 3600  # 1小时超时
+SESSION_MAX_SIZE = 100  # 最大缓存会话数
+
+def _get_or_create_session(sender_id: str, chat_id: str = "") -> Session:
+    """获取或创建用户会话，保持对话历史。"""
+    global SESSION_CACHE
+    
+    # 使用 sender_id + chat_id 作为会话键（群聊和私聊分开）
+    session_key = f"{sender_id}:{chat_id}" if chat_id else sender_id
+    
+    # 清理过期会话
+    current_time = time.time()
+    expired_keys = []
+    for key, (session, last_active) in list(SESSION_CACHE.items()):
+        if current_time - last_active > SESSION_TIMEOUT:
+            expired_keys.append(key)
+    
+    for key in expired_keys:
+        if key in SESSION_CACHE:
+            del SESSION_CACHE[key]
+    
+    # 限制缓存大小
+    if len(SESSION_CACHE) >= SESSION_MAX_SIZE:
+        # 删除最旧的会话
+        oldest_key = min(SESSION_CACHE.keys(), key=lambda k: SESSION_CACHE[k][1])
+        del SESSION_CACHE[oldest_key]
+    
+    # 获取或创建会话
+    if session_key in SESSION_CACHE:
+        session, _ = SESSION_CACHE[session_key]
+        SESSION_CACHE[session_key] = (session, current_time)
+        return session
+    else:
+        # 尝试从文件加载历史会话
+        session_file = DATA_DIR / "sessions" / f"{session_key.replace(':', '_')}.jsonl"
+        if session_file.exists():
+            session = Session(session_file)
+        else:
+            session = init_new_session()
+        
+        SESSION_CACHE[session_key] = (session, current_time)
+        return session
+
+def _save_session_to_file(session_key: str, session: Session):
+    """将会话保存到文件（可选，用于持久化）。"""
+    try:
+        # 确保sessions目录存在
+        sessions_dir = DATA_DIR / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 保存会话到文件
+        filename = f"{session_key.replace(':', '_')}.jsonl"
+        session.path = sessions_dir / filename
+        
+        # 如果会话文件已存在，先备份
+        if session.path.exists():
+            backup_path = session.path.with_suffix('.jsonl.backup')
+            session.path.rename(backup_path)
+        
+        # 写入当前会话历史
+        with open(session.path, 'w', encoding='utf-8') as f:
+            for msg in session.history:
+                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"[WARN] 保存会话失败: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -171,7 +240,40 @@ def _handle_feishu_event(event: dict):
 
     print(f"[INFO] 飞书消息: sender={sender_id[:12]}... type={msg_type} text={text[:80]} reply_to={reply_target[:16]}...")
 
-    session = init_new_session()
+    # 使用会话缓存，保持对话历史
+    session = _get_or_create_session(sender_id, chat_id)
+    
+    # 在会话历史中添加上下文提示
+    context_prompt = f"[系统上下文：飞书用户 sender_open_id={sender_id}, {target_desc}]"
+    
+    # 检测文本中的日期提示（"29号"、"5月29日"等），预加载对应题目
+    import re
+    date_match = re.search(r'(\d{1,2})\s*[月号日]', text) if text else None
+    has_answer_keyword = text and ("第" in text and "题" in text and ("答案" in text or "答案是" in text))
+    
+    if date_match and has_answer_keyword:
+        date_hint = date_match.group(0)
+        try:
+            questions_data = json.loads(find_questions(date_hint=date_hint))
+            if questions_data.get("success"):
+                qs = questions_data.get("questions", [])
+                qs_summary = "\n".join([f"  {q['id']}: {q['question'][:100]}... | 答案:{q['answer']}" for q in qs])
+                context_prompt += f"\n[📅 {questions_data['date']} 历史题目：]\n{qs_summary}"
+            else:
+                context_prompt += f"\n[⚠️ 未找到 {date_hint} 的题目存档]"
+        except Exception:
+            pass
+    
+    # 通用答题批改上下文
+    if has_answer_keyword and not date_match:
+        try:
+            today_file = DATA_DIR / "today_questions.json"
+            if today_file.exists():
+                today_data = json.loads(today_file.read_text(encoding="utf-8"))
+                questions_summary = "\n".join([f"第{q['id'][1:]}题: {q['question'][:100]}..." for q in today_data.get("questions", [])])
+                context_prompt += f"\n[今日题目摘要（{today_data.get('date', '')}）：]\n{questions_summary}"
+        except Exception as e:
+            print(f"[INFO] 读取今日题目失败: {e}")
 
     if msg_type == "image":
         image_key = content.get("image_key", "")
@@ -187,17 +289,20 @@ def _handle_feishu_event(event: dict):
             return
 
         result = run(
-            f"[系统上下文：飞书用户 sender_open_id={sender_id}, {target_desc}]\n"
-            f"学生发来一张图片，已保存到 {local_path}。\n\n"
+            f"{context_prompt}\n"
+            f"学生发来一张图片（手写答案），已保存到 {local_path}。\n\n"
             f"请严格按照 root.md「图片处理」流程执行：\n"
-            f"1. 用 ocr_image 识别（一次即可，返回 confidence_hint）\n"
+            f"0. ⚠️ 先看上下文中有没有日期提示（如'29号'），有日期就用 find_questions 查找历史题目\n"
+            f"1. 用 ocr_image 识别（一次即可，使用增强版LLM视觉能力）\n"
             f"2. 不管 confidence_hint 是多少，都必须用 call_llm 做【第1轮清理】→【第2轮结构化】→【第3轮交叉验证】\n"
             f"3. 三轮增强后如有[疑似]项>30%，用 send_feishu 请学生确认\n"
-            f"4. 确认后按批改流程（读today_questions.json→call_llm批改→更新mastery/error_book→send_feishu发送结果）\n\n"
+            f"4. 确认后按批改流程（find_questions查题目→call_llm批改→更新mastery/error_book→send_feishu发送结果）\n\n"
             f"⚠️ 关键约束：\n"
+            f"- 批改前必须用 find_questions 查找对应日期的题目！\n"
             f"- 绝对不要用 bash 执行本地OCR脚本\n"
-            f"- ocr_image 只调用1次\n"
+            f"- ocr_image 只调用1次（已升级为LLM视觉增强版）\n"
             f"- 必须走完3轮LLM增强再决定是否需要确认\n"
+            f"- 如果图片中是答题，请记住题目和答案的对应关系\n"
             f"- receive_id 用 \"{reply_target}\"",
             session,
         )
@@ -268,18 +373,29 @@ def _handle_feishu_event(event: dict):
                 return
             _log(f"[PRE-CHECK] 题目已完成/无题目，交给LLM生成新题")
 
-        session = init_new_session()
+        # 使用会话缓存，保持对话历史
+        session = _get_or_create_session(sender_id, chat_id)
+        
+        # 构建包含上下文的消息
+        user_message = f"{text}"
+        
+        # 如果是答题批改，添加额外提示
+        if "第" in text and "题" in text and ("答案" in text or "答案是" in text):
+            # 已经在上面的context_prompt中添加了题目信息
+            pass
+        
         result = run(
-            f"[系统上下文：飞书用户 sender_open_id={sender_id}, {target_desc}]\n"
+            f"{context_prompt}\n"
             f"学生发来消息：{text}\n\n"
             f"═══════════════════════════════════════\n"
             f"请根据消息内容判断处理类型并执行：\n"
             f"═══════════════════════════════════════\n\n"
             f"类型A·家长调参（最高优先级）→ 消息含调参关键词+密码，读adjustments.json，用 send_feishu 确认\n"
-            f"类型B·发新题 → 消息含 发题/新题/做题/再来一套 等 → 读adjustments/mastery/error_book/knowledge_map → call_llm出题 → write_file存today_questions.json（date必须={datetime.now().strftime('%Y-%m-%d')}，卡片标题日期必须={datetime.now().strftime('%-m月%-d日')} {['周一','周二','周三','周四','周五','周六','周日'][datetime.now().weekday()]}）→ send_feishu推送卡片\n"
+            f"类型B·发新题 → 消息含 发题/新题/做题/再来一套 等 → 读adjustments/mastery/error_book/knowledge_map → call_llm出题 → write_file存today_questions.json（date必须={datetime.now().strftime('%Y-%m-%d')}，卡片标题日期必须={datetime.now().strftime('%-m月%-d日')} {['周一','周二','周三','周四','周五','周六','周日'][datetime.now().weekday()]}）→ ⚠️同时write_file存data/questions/questions_{datetime.now().strftime('%Y-%m-%d')}.json归档 → send_feishu推送卡片\n"
             f"  出题标准：数学只出提升+拓展，复合应用60%+图形30%+拓展10%；KET写作35%+词汇25%+语法20%\n"
-            f"类型C·答题批改 → 消息含第X题/答案是 → 读today_questions.json批改 → 更新mastery/error_book → send_feishu回复\n"
+            f"类型C·答题批改 → 消息含第X题/答案是 → ⚠️先用find_questions按日期查找题目！有日期关键词（如'29号'）就加date_hint参数 → 找到题目后call_llm批改 → 更新mastery/error_book → send_feishu回复\n"
             f"类型D·普通对话 → 友好回复\n\n"
+            f"⚠️ 学生可能隔天回老题（如'29号第1题答案是XX'），必须用 find_questions(date_hint='29号') 查找，不要假设是今天的题！\n"
             f"⚠️ 铁则：无论哪种类型，必须调用 send_feishu(receive_id=\"{reply_target}\", ...) 发送结果！",
             session,
         )
