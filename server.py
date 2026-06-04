@@ -384,6 +384,22 @@ def _handle_feishu_event(event: dict):
             # 已经在上面的context_prompt中添加了题目信息
             pass
         
+        # 检测"题目不全/重新检查/重新出题"等意图 → 强制走重新出题流程
+        if any(kw in text for kw in ["题目不全", "重新检查", "重新出题", "题不全", "检查题目", "题目有问题"]):
+            result = run(
+                f"{context_prompt}\n"
+                f"学生反馈题目有问题：{text}\n\n"
+                f"请执行以下步骤：\n"
+                f"1. 读取 data/today_questions.json 检查当前题目\n"
+                f"2. 用 call_llm 检查每道题是否完整（填空/改错题必须有原文，选项必须齐全）\n"
+                f"3. 如有不完整的题目，用 call_llm 重新生成完整的题目\n"
+                f"4. 用 write_file 更新 today_questions.json\n"
+                f"5. 用 send_feishu(receive_id=\"{reply_target}\", ...) 发送修正后的题目\n\n"
+                f"⚠️ 必须调用 send_feishu 发送结果！",
+                session,
+            )
+            return
+        
         result = run(
             f"{context_prompt}\n"
             f"学生发来消息：{text}\n\n"
@@ -391,7 +407,7 @@ def _handle_feishu_event(event: dict):
             f"请根据消息内容判断处理类型并执行：\n"
             f"═══════════════════════════════════════\n\n"
             f"类型A·家长调参（最高优先级）→ 消息含调参关键词+密码，读adjustments.json，用 send_feishu 确认\n"
-            f"类型B·发新题 → 消息含 发题/新题/做题/再来一套 等 → 读adjustments/mastery/error_book/knowledge_map → call_llm出题 → write_file存today_questions.json（date必须={datetime.now().strftime('%Y-%m-%d')}，卡片标题日期必须={datetime.now().strftime('%-m月%-d日')} {['周一','周二','周三','周四','周五','周六','周日'][datetime.now().weekday()]}）→ ⚠️同时write_file存data/questions/questions_{datetime.now().strftime('%Y-%m-%d')}.json归档 → send_feishu推送卡片\n"
+            f"类型B·发新题 → 消息含 发题/新题/做题/再来一套 等 → 读adjustments/mastery/error_book/knowledge_map → ⚠️先读root.md「KET题型格式模板」→ call_llm出题（填空/改错/完形必须含完整原文！）→ write_file存today_questions.json（date必须={datetime.now().strftime('%Y-%m-%d')}，卡片标题日期必须={datetime.now().strftime('%-m月%-d日')} {['周一','周二','周三','周四','周五','周六','周日'][datetime.now().weekday()]}）→ ⚠️同时write_file存data/questions/questions_{datetime.now().strftime('%Y-%m-%d')}.json归档 → send_feishu推送卡片\n"
             f"  出题标准：数学只出提升+拓展，复合应用60%+图形30%+拓展10%；KET写作35%+词汇25%+语法20%\n"
             f"类型C·答题批改 → 消息含第X题/答案是 → ⚠️先用find_questions按日期查找题目！有日期关键词（如'29号'）就加date_hint参数 → 找到题目后call_llm批改 → 更新mastery/error_book → send_feishu回复\n"
             f"类型D·普通对话 → 友好回复\n\n"
@@ -464,7 +480,8 @@ def scheduled_daily_push():
             "- 每道题给出完整标准答案和详细解题思路\n\n"
             "英语KET题要求（重点：写作+词汇+语法）：\n"
             "- ⚠️ 先读 KET备考计划.md 确认当前备考阶段和语法范围\n"
-            "- ⚠️ 再读 root.md「KET备考体系」确认出题边界铁律（禁止超阶段出题）\n"
+            "- ⚠️ 再读 root.md「KET题型格式模板」确认每种题型的格式要求\n"
+            "- ⚠️ 填空/改错/完形填空必须包含完整原文，不能只给空格不给上下文！\n"
             "- ⚠️ 重点倾斜：写作35% + 词汇25% + 语法20% + 阅读10% + 听力口语各5%\n"
             "- 写作题要求：≥35词短文，给出范文和评分要点（语法/词汇/结构各占分）\n"
             "- 词汇题要求：同义词辨析、短语搭配、语境选词，不只考拼写\n"
@@ -833,10 +850,24 @@ def health():
 _SCHEDULER_STARTED = False
 
 def _auto_start_scheduler():
-    """模块加载时自动启动调度器（gunicorn --preload 在主进程执行，worker 不重复）。"""
+    """模块加载时自动启动调度器。
+    使用文件锁防止gunicorn多worker重复启动（每个worker独立进程，全局变量无法跨进程共享）。
+    """
     global _SCHEDULER_STARTED
     if _SCHEDULER_STARTED:
         return
+    
+    # 文件锁：只有第一个获取锁的worker启动调度器
+    lock_file = DATA_DIR / ".scheduler.lock"
+    import fcntl
+    try:
+        lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (IOError, OSError):
+        # 锁已被其他worker持有，跳过
+        _SCHEDULER_STARTED = True
+        return
+    
     _SCHEDULER_STARTED = True
     try:
         start_scheduler()
