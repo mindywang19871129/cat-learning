@@ -1,11 +1,11 @@
 # 🐱 小肥猫学习助手 v2.9 — 项目完整手册
 
-> 最后更新：2026-06-01 09:47 | 工作空间：`/Users/mindy/CodeBuddy/20260521173149/cat-learning`
+> 最后更新：2026-06-04 09:31 | 工作空间：`/Users/mindy/CodeBuddy/20260521173149/cat-learning`
 > GitHub: `git@github.com:mindywang19871129/cat-learning.git`
 >
 > **变更记录**：见 Git 提交历史。每次变更同步更新本文档。
 >
-> **当前部署状态**：代码 v2.10 | DeepSeek V4 Pro ✅ | 飞书 ✅ | OCR.space ✅ | 家长密码 ✅ | 📚联网搜教材 | 🔬错题本分析 | 🎯飞书动态调整 | 📖 KET备考体系(v2.6) | 📅历史题目匹配(v2.10) | 🎉 全链路就绪
+> **当前部署状态**：代码 v2.11 | DeepSeek V4 Pro ✅ | 飞书 ✅ | OCR.space ✅ | 家长密码 ✅ | 📚联网搜教材 | 🔬错题本分析 | 🎯飞书动态调整 | 📖 KET备考体系(v2.6) | 📅历史题目匹配(v2.10) | 🔧多worker防重复出题(v2.11) | 📝KET题型格式模板(v2.11) | 🎉 全链路就绪
 
 ---
 
