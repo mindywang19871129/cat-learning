@@ -272,8 +272,8 @@ def _handle_feishu_event(event: dict):
             date_hint = f"{m.group(1)}月{m.group(2)}日"
             date_match = m
         else:
-            # 匹配 "0603" 纯数字格式（4位MMDD）
-            m = re.search(r'\b(\d{2})(\d{2})\b', text)
+            # 匹配 "0603" 纯数字格式（4位MMDD，后面可能跟中文）
+            m = re.search(r'(?<!\d)(\d{2})(\d{2})(?!\d)', text)
             if m:
                 month, day = int(m.group(1)), int(m.group(2))
                 if 1 <= month <= 12 and 1 <= day <= 31:
@@ -444,7 +444,7 @@ def _handle_feishu_event(event: dict):
             f"类型A·家长调参（最高优先级）→ 消息含调参关键词+密码，读adjustments.json，用 send_feishu 确认\n"
             f"类型B·发新题 → 消息含 发题/新题/做题/再来一套 等 → ⚠️先检查error_book.json前一天错题是否已订正（无reviewed_date则拦截）→ 读adjustments/mastery/error_book/knowledge_map → ⚠️先读root.md「KET题型格式模板」→ call_llm出题（填空/改错/完形必须含完整原文！数学题禁用水果/物品名，用图形或纯文字！）→ write_file存today_questions.json（date必须={datetime.now().strftime('%Y-%m-%d')}，卡片标题日期必须={datetime.now().strftime('%-m月%-d日')} {['周一','周二','周三','周四','周五','周六','周日'][datetime.now().weekday()]}）→ ⚠️同时write_file存data/questions/questions_{datetime.now().strftime('%Y-%m-%d')}.json归档 → send_feishu推送卡片\n"
             f"  出题标准：数学只出提升+拓展，复合应用60%+图形30%+拓展10%；KET写作35%+词汇25%+语法20%\n"
-            f"类型C·答题批改 → 消息含第X题/答案是 → ⚠️先用find_questions按日期查找题目！有日期关键词（如'29号'）就加date_hint参数 → 找到题目后call_llm批改 → 更新mastery/error_book → send_feishu回复\n"
+            f"类型C·答题批改 → 消息含第X题/答案是 → ⚠️先用find_questions按日期查找题目！有日期关键词（如'0603'、'29号'）就加date_hint参数 → 找到题目后call_llm批改 → ⚠️铁律：如果学生答案与题目明显不符（如题目问周长但答案写乘法结果、题目问除法但答案写加法），绝对不要直接判错！必须先用send_feishu问孩子「🐱 你答的是哪天的题呀？告诉小猫日期（比如0603或6月3日），我帮你找到正确的题目～」→ 等回复后再批改 → 更新mastery/error_book → send_feishu回复\n"
             f"类型D·普通对话 → 友好回复\n\n"
             f"⚠️ 学生可能隔天回老题（如'29号第1题答案是XX'），必须用 find_questions(date_hint='29号') 查找，不要假设是今天的题！\n"
             f"⚠️ 铁则：无论哪种类型，必须调用 send_feishu(receive_id=\"{reply_target}\", ...) 发送结果！",

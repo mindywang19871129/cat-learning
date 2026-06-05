@@ -617,7 +617,8 @@ def enhanced_ocr_image(image_path: str, use_llm_vision: bool = True) -> str:
 # ─── 工具 10：按日期查找历史题目 ───────────────────────────────────
 
 def find_questions(date_hint: str = "") -> str:
-    """按日期查找题目档案。date_hint 可为 '2026-05-29'/'29号'/'5月29日'/'today'，不传返回所有存档列表。"""
+    """按日期查找题目档案。date_hint 可为 '2026-05-29'/'29号'/'5月29日'/'0603'/'today'，不传返回所有存档列表。"""
+    import re
     questions_dir = DATA_DIR / "questions"
     questions_dir.mkdir(parents=True, exist_ok=True)
 
@@ -648,10 +649,15 @@ def find_questions(date_hint: str = "") -> str:
     elif hint.startswith("202") and len(hint) >= 10:
         # 直接是日期格式 2026-05-29
         target_date = hint[:10]
+    elif re.match(r'^\d{4}$', hint) and len(hint) == 4:
+        # "0603" 纯数字MMDD格式
+        month, day = int(hint[:2]), int(hint[2:])
+        year = datetime.now().year
+        if month > datetime.now().month:
+            year -= 1
+        target_date = f"{year}-{month:02d}-{day:02d}"
     else:
         # "29号" / "5月29日" / "5.29" 等
-        import re
-        # 匹配 "5月29日" 或 "5.29" 或 "5-29"
         m = re.search(r'(\d{1,2})\s*[月.\-]\s*(\d{1,2})\s*[日号]?', hint)
         if m:
             month, day = int(m.group(1)), int(m.group(2))
