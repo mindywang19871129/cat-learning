@@ -560,8 +560,14 @@ def enhanced_ocr_image(image_path: str, use_llm_vision: bool = True) -> str:
     # 1. 优先使用LLM视觉（如果可用）
     if use_llm_vision and VISION_APIS:
         llm_result = analyze_image_via_llm(image_path, 
-            "请仔细识别图片中的手写文字内容。这是小学生手写的数学/英语答案。"
-            "请逐行输出识别结果，保持原始格式。如果有数学算式，请准确识别数字和运算符号。")
+            "请仔细识别图片中的所有手写文字和数字。这是小学生手写的数学/英语答案。\n"
+            "⚠️ 重要：\n"
+            "- 逐行输出，不要遗漏任何一行，即使字迹潦草也要尽力识别\n"
+            "- 数学算式：准确识别数字（0-9）、运算符号（+ - × ÷ =）、单位（米、厘米、千克等）\n"
+            "- 英语答案：准确识别字母大小写、单词拼写\n"
+            "- 如果有题号（如1. 2. 3.），保留题号\n"
+            "- 如果某处确实无法辨认，标注为[?]，但不要轻易放弃\n"
+            "- 输出格式：每行一个答案，如「1. 58×3=174」")
         llm_data = json.loads(llm_result)
         if llm_data.get("success"):
             return llm_result

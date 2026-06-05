@@ -115,10 +115,25 @@ def _check_today_questions_completed():
     用于手动发题请求：
     - 今天已有题目（不管是否完成）→ 拦截，不出新题
     - 今天没有题目 → 放行
+    - 前一天错题未订正 → 拦截，不出新题
     返回 (can_generate: bool, reason: str)
     """
     today_str = datetime.now().strftime("%Y-%m-%d")
     today_file = DATA_DIR / "today_questions.json"
+    
+    # ── 检查前一天错题是否已订正 ──
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    error_file = DATA_DIR / "error_book.json"
+    if error_file.exists():
+        try:
+            errors = json.loads(error_file.read_text(encoding="utf-8"))
+            # 检查昨天是否有未订正的错题（无reviewed_date或reviewed_date为空）
+            yesterday_errors = [e for e in errors if e.get("date", "") == yesterday and not e.get("reviewed_date")]
+            if yesterday_errors:
+                return False, f"昨天还有 {len(yesterday_errors)} 道错题未订正，请先完成错题复习再出新题"
+        except Exception:
+            pass
+    
     if not today_file.exists():
         return True, "今天还没有题目"
 
@@ -246,13 +261,33 @@ def _handle_feishu_event(event: dict):
     # 在会话历史中添加上下文提示
     context_prompt = f"[系统上下文：飞书用户 sender_open_id={sender_id}, {target_desc}]"
     
-    # 检测文本中的日期提示（"29号"、"5月29日"等），预加载对应题目
+    # 检测文本中的日期提示（"29号"、"5月29日"、"0603"等），预加载对应题目
     import re
-    date_match = re.search(r'(\d{1,2})\s*[月号日]', text) if text else None
-    has_answer_keyword = text and ("第" in text and "题" in text and ("答案" in text or "答案是" in text))
+    date_match = None
+    date_hint = None
+    if text:
+        # 匹配 "0603" / "6月3日" / "6.3" / "29号" / "2026-06-03" 等格式
+        m = re.search(r'(\d{1,2})\s*[月.\-]\s*(\d{1,2})\s*[日号]?', text)
+        if m:
+            date_hint = f"{m.group(1)}月{m.group(2)}日"
+            date_match = m
+        else:
+            # 匹配 "0603" 纯数字格式（4位MMDD）
+            m = re.search(r'\b(\d{2})(\d{2})\b', text)
+            if m:
+                month, day = int(m.group(1)), int(m.group(2))
+                if 1 <= month <= 12 and 1 <= day <= 31:
+                    date_hint = f"{month}月{day}日"
+                    date_match = m
+            else:
+                # 匹配 "29号" / "3日" 等
+                m = re.search(r'(\d{1,2})\s*[日号]', text)
+                if m:
+                    date_hint = m.group(0)
+                    date_match = m
+    has_answer_keyword = text and ("第" in text and "题" in text and ("答案" in text or "答案是" in text or "错题" in text or "不会" in text))
     
     if date_match and has_answer_keyword:
-        date_hint = date_match.group(0)
         try:
             questions_data = json.loads(find_questions(date_hint=date_hint))
             if questions_data.get("success"):
@@ -407,7 +442,7 @@ def _handle_feishu_event(event: dict):
             f"请根据消息内容判断处理类型并执行：\n"
             f"═══════════════════════════════════════\n\n"
             f"类型A·家长调参（最高优先级）→ 消息含调参关键词+密码，读adjustments.json，用 send_feishu 确认\n"
-            f"类型B·发新题 → 消息含 发题/新题/做题/再来一套 等 → 读adjustments/mastery/error_book/knowledge_map → ⚠️先读root.md「KET题型格式模板」→ call_llm出题（填空/改错/完形必须含完整原文！）→ write_file存today_questions.json（date必须={datetime.now().strftime('%Y-%m-%d')}，卡片标题日期必须={datetime.now().strftime('%-m月%-d日')} {['周一','周二','周三','周四','周五','周六','周日'][datetime.now().weekday()]}）→ ⚠️同时write_file存data/questions/questions_{datetime.now().strftime('%Y-%m-%d')}.json归档 → send_feishu推送卡片\n"
+            f"类型B·发新题 → 消息含 发题/新题/做题/再来一套 等 → ⚠️先检查error_book.json前一天错题是否已订正（无reviewed_date则拦截）→ 读adjustments/mastery/error_book/knowledge_map → ⚠️先读root.md「KET题型格式模板」→ call_llm出题（填空/改错/完形必须含完整原文！数学题禁用水果/物品名，用图形或纯文字！）→ write_file存today_questions.json（date必须={datetime.now().strftime('%Y-%m-%d')}，卡片标题日期必须={datetime.now().strftime('%-m月%-d日')} {['周一','周二','周三','周四','周五','周六','周日'][datetime.now().weekday()]}）→ ⚠️同时write_file存data/questions/questions_{datetime.now().strftime('%Y-%m-%d')}.json归档 → send_feishu推送卡片\n"
             f"  出题标准：数学只出提升+拓展，复合应用60%+图形30%+拓展10%；KET写作35%+词汇25%+语法20%\n"
             f"类型C·答题批改 → 消息含第X题/答案是 → ⚠️先用find_questions按日期查找题目！有日期关键词（如'29号'）就加date_hint参数 → 找到题目后call_llm批改 → 更新mastery/error_book → send_feishu回复\n"
             f"类型D·普通对话 → 友好回复\n\n"
@@ -471,6 +506,7 @@ def scheduled_daily_push():
             "数学题要求（难度=hard）：\n"
             "- 从北师大版三下7个单元中，优先出 mastery<95 的知识点（95分达标线）\n"
             "- ⚠️ 只出「提升」和「拓展」难度，禁止出基础题\n"
+            "- ⚠️ 禁用具体水果/物品名称（苹果、橘子、西瓜、铅笔等），改用「圆形」「三角形」「正方形」等简单图形或纯文字描述数量关系\n"
             "- 每道题至少需要2步以上推理才能完成，考察综合运用能力\n"
             "- 题目要有多层逻辑嵌套（如：先算面积→再比较→最后决策）\n"
             "- 应用题要求从实际场景中抽象数学模型，不是简单的代入公式\n"
