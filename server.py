@@ -108,6 +108,7 @@ def _save_session_to_file(session_key: str, session: Session):
 
 # ── 发题/新题 触发关键词 ──
 _FATI_KEYWORDS = ["发题", "新题", "做题", "来一套", "再来一套", "发一套", "再发", "做新题", "出题", "推送题目", "今日题目", "每日一练"]
+_WEEKLY_KEYWORDS = ["综合测试", "每周测试", "周测", "周末测试", "复习测试"]
 
 
 def _check_today_questions_completed():
@@ -420,17 +421,41 @@ def _handle_feishu_event(event: dict):
             pass
         
         # 检测"题目不全/重新检查/重新出题"等意图 → 强制走重新出题流程
-        if any(kw in text for kw in ["题目不全", "重新检查", "重新出题", "题不全", "检查题目", "题目有问题"]):
+        _FIX_KEYWORDS = ["题目不全", "重新检查", "重新出题", "题不全", "检查题目", "题目有问题",
+                         "英语题不全", "完形填空不全", "语法题不全", "题目不完整", "选项不全",
+                         "没有原文", "没有选项", "题目有误", "题不对", "重新生成"]
+        if any(kw in text for kw in _FIX_KEYWORDS):
             result = run(
                 f"{context_prompt}\n"
                 f"学生反馈题目有问题：{text}\n\n"
-                f"请执行以下步骤：\n"
+                f"请执行以下步骤（必须完成每一步）：\n"
                 f"1. 读取 data/today_questions.json 检查当前题目\n"
-                f"2. 用 call_llm 检查每道题是否完整（填空/改错题必须有原文，选项必须齐全）\n"
-                f"3. 如有不完整的题目，用 call_llm 重新生成完整的题目\n"
+                f"2. 用 call_llm 逐题检查完整性：\n"
+                f"   - 完形填空：必须有完整短文+空格+选项\n"
+                f"   - 语法填空：必须有完整句子+空格+选项\n"
+                f"   - 改错题：必须有完整句子+错误标注\n"
+                f"   - 写作题：必须有题目+范文\n"
+                f"3. 如有不完整的题目，用 call_llm 重新生成完整题目（必须包含原文和选项！）\n"
                 f"4. 用 write_file 更新 today_questions.json\n"
-                f"5. 用 send_feishu(receive_id=\"{reply_target}\", ...) 发送修正后的题目\n\n"
-                f"⚠️ 必须调用 send_feishu 发送结果！",
+                f"5. ⚠️ 必须调用 send_feishu(receive_id=\"{reply_target}\", ...) 发送修正后的完整题目！\n\n"
+                f"⚠️ 铁律：必须调用 send_feishu 发送结果，不能只修改文件不通知用户！",
+                session,
+            )
+            return
+        
+        # 检测"综合测试/周测"意图 → 手动触发综合测试
+        if any(kw in text for kw in _WEEKLY_KEYWORDS):
+            result = run(
+                f"{context_prompt}\n"
+                f"学生请求综合测试：{text}\n\n"
+                f"请执行每周综合测试流程：\n"
+                f"1. 读取 data/error_book.json → 筛选本周错题\n"
+                f"2. 读取 data/mastery.json → 找到本周知识点\n"
+                f"3. 读取 KET备考计划.md → 确认当前阶段\n"
+                f"4. 出题：数学4题（2错题变式+2新内容）+ 英语6题（2错题变式+2新语法+2词汇检测）\n"
+                f"5. 生成本周KET词汇复习表（至少10个词）\n"
+                f"6. ⚠️ 必须调用 send_feishu(receive_id=\"{reply_target}\", ...) 发送综合测试卡片！\n\n"
+                f"⚠️ 铁则：必须调用 send_feishu 发送结果！",
                 session,
             )
             return
@@ -525,11 +550,19 @@ def scheduled_daily_push():
             "- 包含：短文写作+语法填空+词汇选择+完形填空+句型转换\n"
             "- 每道题给出完整标准答案、纠错提示和知识点链接\n\n"
             "═══════════════════════════════════════\n"
-            "第三步：存储 → 存入 data/today_questions.json\n"
+            "第三步：KET词汇学习（每日必做）\n"
+            "═══════════════════════════════════════\n"
+            "- 从KET核心词表选3-5个新词（按主题：家庭/学校/食物/运动/节日/旅行/天气/动物）\n"
+            "- 格式：英文 + 中文 + 词性 + 例句\n"
+            "- 从本周已学词中选5个复习（英译中/中译英/选词填空）\n"
+            "- 将新词写入 data/ket_vocabulary.json（如文件不存在则创建）\n"
+            "- 格式：[{{\"word\":\"apple\",\"chinese\":\"苹果\",\"pos\":\"n.\",\"example\":\"I eat an apple.\",\"learned_date\":\"{datetime.now().strftime('%Y-%m-%d')}\",\"review_dates\":[],\"mastered\":false}}]\n\n"
+            "═══════════════════════════════════════\n"
+            "第四步：存储 → 存入 data/today_questions.json\n"
             "═══════════════════════════════════════\n"
             f"格式：{{\"date\":\"{datetime.now().strftime('%Y-%m-%d')}\",\"math\":[{{id,question,answer,hint,difficulty,topic_id}}],\"english\":[{{id,question,answer,hint,topic_id}}]}}\n\n"
             "═══════════════════════════════════════\n"
-            "第四步：推送 → 用 send_feishu 发卡片到每个 chat\n"
+            "第五步：推送 → 用 send_feishu 发卡片到每个 chat\n"
             "═══════════════════════════════════════\n"
             f"推送目标聊天ID：{chat_ids_str}\n"
             "卡片消息格式要求：\n"
@@ -549,11 +582,69 @@ def scheduled_daily_push():
         _log(traceback.format_exc())
 
 
+def scheduled_weekly_test():
+    """每周日综合测试：复习本周错题+新内容+词汇检测。"""
+    _log(f"[SCHEDULER] 执行每周综合测试: {datetime.now()}")
+    
+    poll_cfg = CFG.get("feishu", {}).get("poll", {})
+    target_chat_ids = poll_cfg.get("chat_ids", [])
+    if not target_chat_ids:
+        return
+    
+    chat_ids_str = json.dumps(target_chat_ids, ensure_ascii=False)
+    
+    try:
+        session = init_new_session()
+        result = run(
+            "请执行每周综合测试推送。\n\n"
+            "═══════════════════════════════════════\n"
+            "第一步：读取本周数据\n"
+            "═══════════════════════════════════════\n"
+            "1. 读取 data/error_book.json → 筛选本周错题（date在本周范围内）\n"
+            "2. 读取 data/mastery.json → 找到本周练习过的知识点\n"
+            "3. 读取 data/knowledge_map.json → 确认知识范围\n"
+            "4. 读取 KET备考计划.md → 确认当前阶段\n\n"
+            "═══════════════════════════════════════\n"
+            "第二步：出题（综合测试）\n"
+            "═══════════════════════════════════════\n"
+            "数学（4题）：\n"
+            "- 2题来自本周错题（变式题，同知识点不同题目）\n"
+            "- 2题新内容（本周未覆盖的知识点）\n"
+            "- 禁用水果/物品名，用图形或纯文字\n\n"
+            "英语KET（6题）：\n"
+            "- 2题来自本周错题（变式题）\n"
+            "- 2题新语法/词汇\n"
+            "- 2题词汇检测（本周学过的KET词汇，英译中+中译英+选词填空）\n"
+            "- ⚠️ 必须读 root.md「KET题型格式模板」！完形/填空/改错必须含完整原文和选项！\n\n"
+            "═══════════════════════════════════════\n"
+            "第三步：词汇复习\n"
+            "═══════════════════════════════════════\n"
+            "- 从本周题目中提取KET核心词汇（至少10个）\n"
+            "- 生成词汇表：英文+中文+例句\n"
+            "- 用 send_feishu 推送词汇卡片\n\n"
+            "═══════════════════════════════════════\n"
+            "第四步：推送\n"
+            "═══════════════════════════════════════\n"
+            f"推送目标：{chat_ids_str}\n"
+            f"标题：🐱 小肥猫每周综合测试（{datetime.now().strftime('%-m月%-d日')} 周日）\n"
+            "用 send_feishu 发送卡片，包含数学+英语+词汇表\n"
+            "⚠️ 必须调用 send_feishu 发送结果！",
+            session,
+        )
+        _log(f"[SCHEDULER] 每周测试完成: {result[:300] if result else 'None'}")
+    except Exception as e:
+        _log(f"[SCHEDULER] 每周测试失败: {e}")
+        _log(traceback.format_exc())
+
+
 def start_scheduler():
     push_time = CFG.get("education", {}).get("push_time", "09:00")
     hour, minute = map(int, push_time.split(":"))
     scheduler = BackgroundScheduler()
     scheduler.add_job(scheduled_daily_push, 'cron', hour=hour, minute=minute, id='daily_push')
+    
+    # 每周日综合测试（复习本周+新内容）
+    scheduler.add_job(scheduled_weekly_test, 'cron', day_of_week='sun', hour=hour, minute=minute, id='weekly_test')
     
     # 飞书消息轮询（内网无公网IP模式）
     poll_cfg = CFG.get("feishu", {}).get("poll", {})
@@ -563,7 +654,7 @@ def start_scheduler():
         print(f"[POLL] 飞书消息轮询已启动，间隔 {interval}s，监控 {len(poll_cfg['chat_ids'])} 个聊天")
     
     scheduler.start()
-    print(f"[SCHEDULER] 已启动，每日 {push_time} 推送")
+    print(f"[SCHEDULER] 已启动，每日 {push_time} 推送，周日综合测试")
 
 
 # ══════════════════════════════════════════════════════════════════════
