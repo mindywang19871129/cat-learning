@@ -61,6 +61,7 @@ with open(HOME / "config.toml", "rb") as _f:
     CFG = tomllib.load(_f)
 
 MODEL = CFG["api"]["model"]
+REASONING_MODEL = CFG["api"].get("reasoning_model", MODEL)
 BASE_URL = CFG["api"]["base_url"]
 API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 if not API_KEY:
@@ -188,13 +189,13 @@ def ask_user(question: str, _on_ask_user=None) -> str:
 # ─── 工具 7：LLM 子调用 ─────────────────────────────────────────────
 
 def call_llm(prompt: str, system: str = "") -> str:
-    """隔离的 LLM 子调用，不影响主对话历史。"""
+    """隔离的 LLM 子调用，不影响主对话历史。复杂任务用推理模型保证质量。"""
     msgs = []
     if system:
         msgs.append({"role": "system", "content": system})
     msgs.append({"role": "user", "content": prompt})
     resp = CLIENT.chat.completions.create(
-        model=MODEL, messages=msgs, stream=False,
+        model=REASONING_MODEL, messages=msgs, stream=False,
     )
     return resp.choices[0].message.content or ""
 
@@ -1003,6 +1004,7 @@ def dispatch(name: str, args_json: str, on_ask_user=None) -> str:
 def llm_call_streaming(messages, tools, on_chunk=None):
     response = CLIENT.chat.completions.create(
         model=MODEL, messages=messages, tools=tools, stream=True,
+        # 日常对话用快速模型，复杂子任务由 call_llm 用推理模型处理
     )
     content_parts = []
     reasoning_parts = []
