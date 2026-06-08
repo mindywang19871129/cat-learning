@@ -109,6 +109,7 @@ def _save_session_to_file(session_key: str, session: Session):
 # ── 发题/新题 触发关键词 ──
 _FATI_KEYWORDS = ["发题", "新题", "做题", "来一套", "再来一套", "发一套", "再发", "做新题", "出题", "推送题目", "今日题目", "每日一练"]
 _WEEKLY_KEYWORDS = ["综合测试", "每周测试", "周测", "周末测试", "复习测试"]
+_VOCAB_KEYWORDS = ["词汇测试", "单词测试", "背单词", "词汇打卡", "单词打卡", "测词汇", "测单词", "词汇量", "复习单词", "生词"]
 
 
 def _check_today_questions_completed():
@@ -460,6 +461,28 @@ def _handle_feishu_event(event: dict):
             )
             return
         
+        # 检测"词汇测试/背单词"等意图 → 飞书内词汇训练
+        if any(kw in text for kw in _VOCAB_KEYWORDS):
+            result = run(
+                f"{context_prompt}\n"
+                f"学生请求词汇训练：{text}\n\n"
+                f"请执行飞书内KET词汇训练流程：\n"
+                f"1. 读取 data/ket_vocabulary.json（如不存在则用 call_llm 从KET词表创建，至少50词）\n"
+                f"2. 根据学生意图选择模式：\n"
+                f"   - 「词汇测试」→ 随机抽10个生词，英英释义匹配（4选1）\n"
+                f"   - 「背单词」→ 5个新词+5个复习，英英释义+语境填空\n"
+                f"   - 「复习单词」→ 从已学词中抽10个，语境填空\n"
+                f"   - 「生词」→ 列出所有未掌握的单词\n"
+                f"3. ⚠️ 词汇题必须用英语解释英语，禁止中文！\n"
+                f"   格式：This is a fruit. It is red or green. You can eat it.\n"
+                f"         A. bread  B. apple  C. chicken  D. rice\n"
+                f"4. 用 send_feishu(receive_id=\"{reply_target}\", ...) 发送词汇卡片\n"
+                f"5. 更新 data/ket_vocabulary.json（标记已学/已掌握）\n\n"
+                f"⚠️ 铁则：必须调用 send_feishu 发送结果！",
+                session,
+            )
+            return
+        
         result = run(
             f"{context_prompt}\n"
             f"学生发来消息：{text}\n\n"
@@ -469,7 +492,8 @@ def _handle_feishu_event(event: dict):
             f"类型A·家长调参（最高优先级）→ 消息含调参关键词+密码，读adjustments.json，用 send_feishu 确认\n"
             f"类型B·发新题 → 消息含 发题/新题/做题/再来一套 等 → ⚠️先检查error_book.json前一天错题是否已订正（无reviewed_date则拦截）→ 读adjustments/mastery/error_book/knowledge_map → ⚠️先读root.md「KET题型格式模板」→ call_llm出题（填空/改错/完形必须含完整原文！数学题禁用水果/物品名，用图形或纯文字！）→ ⚠️同时读data/ket_vocabulary.json，生成KET风格词汇题（英英释义+语境填空，10题）→ write_file存today_questions.json（date必须={datetime.now().strftime('%Y-%m-%d')}，卡片标题日期必须={datetime.now().strftime('%-m月%-d日')} {['周一','周二','周三','周四','周五','周六','周日'][datetime.now().weekday()]}）→ ⚠️同时write_file存data/questions/questions_{datetime.now().strftime('%Y-%m-%d')}.json归档 → send_feishu推送两张卡片（题目卡+词汇卡）\n"
             f"  出题标准：数学只出提升+拓展，复合应用60%+图形30%+拓展10%；KET写作35%+词汇25%+语法20%\n"
-            f"类型C·答题批改 → 消息含第X题/答案是 → ⚠️先用find_questions按日期查找题目！有日期关键词（如'0603'、'29号'）就加date_hint参数 → 找到题目后call_llm批改 → ⚠️铁律：如果学生答案与题目明显不符（如题目问周长但答案写乘法结果、题目问除法但答案写加法），绝对不要直接判错！必须先用send_feishu问孩子「🐱 你答的是哪天的题呀？告诉小猫日期（比如0603或6月3日），我帮你找到正确的题目～」→ 等回复后再批改 → 更新mastery/error_book → send_feishu回复\n"
+            f"类型C·答题批改 → 消息含第X题/答案是/词汇题答案 → ⚠️先用find_questions按日期查找题目！有日期关键词（如'0603'、'29号'）就加date_hint参数 → 找到题目后call_llm批改 → ⚠️铁律：如果学生答案与题目明显不符，绝对不要直接判错！必须先用send_feishu问孩子是哪天的题 → 更新mastery/error_book → send_feishu回复\n"
+            f"类型E·词汇答题 → 消息含词汇题答案（如'第1题选B'、'答案是apple'）→ 读取data/ket_vocabulary.json核对答案 → 更新词库状态 → send_feishu回复结果\n"
             f"类型D·普通对话 → 友好回复\n\n"
             f"⚠️ 学生可能隔天回老题（如'29号第1题答案是XX'），必须用 find_questions(date_hint='29号') 查找，不要假设是今天的题！\n"
             f"⚠️ 铁则：无论哪种类型，必须调用 send_feishu(receive_id=\"{reply_target}\", ...) 发送结果！",
