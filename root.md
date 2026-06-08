@@ -163,6 +163,36 @@
 
 **⚠️ 所有填空/改错题必须包含完整原文，不能只给空格不给上下文！**
 
+### KET 词汇题格式（英英释义，KET考试标准）
+
+**词汇题必须用英语解释英语，不用中文！**
+
+**英英释义匹配**：
+```
+例：Match the word with its meaning:
+    This is a fruit. It is red or green. You can eat it.
+    A. bread   B. apple   C. chicken   D. rice
+    答案：B. apple
+```
+
+**语境填空（英文提示）**：
+```
+例：I drink _____ every morning. (a white drink from cows)
+    答案：milk
+```
+
+**同义词/反义词**：
+```
+例：The opposite of "hot" is _____.
+    答案：cold
+```
+
+**⚠️ 词汇题铁律**：
+- 必须用英文解释英文，禁止出现中文
+- 提示用简单英文描述（a place where..., a thing that..., a person who...）
+- 选项必须是同主题的KET词汇
+- 每道词汇题标注对应KET主题（家庭/学校/食物/运动等）
+
 ---
 
 ## 核心身份

@@ -467,7 +467,7 @@ def _handle_feishu_event(event: dict):
             f"请根据消息内容判断处理类型并执行：\n"
             f"═══════════════════════════════════════\n\n"
             f"类型A·家长调参（最高优先级）→ 消息含调参关键词+密码，读adjustments.json，用 send_feishu 确认\n"
-            f"类型B·发新题 → 消息含 发题/新题/做题/再来一套 等 → ⚠️先检查error_book.json前一天错题是否已订正（无reviewed_date则拦截）→ 读adjustments/mastery/error_book/knowledge_map → ⚠️先读root.md「KET题型格式模板」→ call_llm出题（填空/改错/完形必须含完整原文！数学题禁用水果/物品名，用图形或纯文字！）→ write_file存today_questions.json（date必须={datetime.now().strftime('%Y-%m-%d')}，卡片标题日期必须={datetime.now().strftime('%-m月%-d日')} {['周一','周二','周三','周四','周五','周六','周日'][datetime.now().weekday()]}）→ ⚠️同时write_file存data/questions/questions_{datetime.now().strftime('%Y-%m-%d')}.json归档 → send_feishu推送卡片\n"
+            f"类型B·发新题 → 消息含 发题/新题/做题/再来一套 等 → ⚠️先检查error_book.json前一天错题是否已订正（无reviewed_date则拦截）→ 读adjustments/mastery/error_book/knowledge_map → ⚠️先读root.md「KET题型格式模板」→ call_llm出题（填空/改错/完形必须含完整原文！数学题禁用水果/物品名，用图形或纯文字！）→ ⚠️同时读data/ket_vocabulary.json，生成KET风格词汇题（英英释义+语境填空，10题）→ write_file存today_questions.json（date必须={datetime.now().strftime('%Y-%m-%d')}，卡片标题日期必须={datetime.now().strftime('%-m月%-d日')} {['周一','周二','周三','周四','周五','周六','周日'][datetime.now().weekday()]}）→ ⚠️同时write_file存data/questions/questions_{datetime.now().strftime('%Y-%m-%d')}.json归档 → send_feishu推送两张卡片（题目卡+词汇卡）\n"
             f"  出题标准：数学只出提升+拓展，复合应用60%+图形30%+拓展10%；KET写作35%+词汇25%+语法20%\n"
             f"类型C·答题批改 → 消息含第X题/答案是 → ⚠️先用find_questions按日期查找题目！有日期关键词（如'0603'、'29号'）就加date_hint参数 → 找到题目后call_llm批改 → ⚠️铁律：如果学生答案与题目明显不符（如题目问周长但答案写乘法结果、题目问除法但答案写加法），绝对不要直接判错！必须先用send_feishu问孩子「🐱 你答的是哪天的题呀？告诉小猫日期（比如0603或6月3日），我帮你找到正确的题目～」→ 等回复后再批改 → 更新mastery/error_book → send_feishu回复\n"
             f"类型D·普通对话 → 友好回复\n\n"
@@ -550,25 +550,33 @@ def scheduled_daily_push():
             "- 包含：短文写作+语法填空+词汇选择+完形填空+句型转换\n"
             "- 每道题给出完整标准答案、纠错提示和知识点链接\n\n"
             "═══════════════════════════════════════\n"
-            "第三步：KET词汇学习（每日必做）\n"
+            "第三步：KET词汇学习（每日必做，KET风格）\n"
             "═══════════════════════════════════════\n"
-            "- 从KET核心词表选3-5个新词（按主题：家庭/学校/食物/运动/节日/旅行/天气/动物）\n"
-            "- 格式：英文 + 中文 + 词性 + 例句\n"
-            "- 从本周已学词中选5个复习（英译中/中译英/选词填空）\n"
-            "- 将新词写入 data/ket_vocabulary.json（如文件不存在则创建）\n"
+            "- ⚠️ 先读取 data/ket_vocabulary.json 获取已学词和生词\n"
+            "- 从生词中选5个新词，用KET风格出题：\n"
+            "  【英英释义匹配】给出英文释义，让学生选对应的单词\n"
+            "  例：This is a fruit. It is red or green. You can eat it. → 答案：apple\n"
+            "  【语境填空】给出英文句子，用英文提示让学生填词\n"
+            "  例：I drink _____ every morning. (a white drink from cows) → 答案：milk\n"
+            "- 从已学词中选5个复习（英英释义+语境填空）\n"
+            "- 将新词写入 data/ket_vocabulary.json（与单词训练营共享同一文件）\n"
             "- 格式：[{{\"word\":\"apple\",\"chinese\":\"苹果\",\"pos\":\"n.\",\"example\":\"I eat an apple.\",\"learned_date\":\"{datetime.now().strftime('%Y-%m-%d')}\",\"review_dates\":[],\"mastered\":false}}]\n\n"
             "═══════════════════════════════════════\n"
             "第四步：存储 → 存入 data/today_questions.json\n"
             "═══════════════════════════════════════\n"
-            f"格式：{{\"date\":\"{datetime.now().strftime('%Y-%m-%d')}\",\"math\":[{{id,question,answer,hint,difficulty,topic_id}}],\"english\":[{{id,question,answer,hint,topic_id}}]}}\n\n"
+            f"格式：{{\"date\":\"{datetime.now().strftime('%Y-%m-%d')}\",\"math\":[{{id,question,answer,hint,difficulty,topic_id}}],\"english\":[{{id,question,answer,hint,topic_id}}],\"vocab\":[{{id,question,answer,hint}}]}}\n\n"
             "═══════════════════════════════════════\n"
             "第五步：推送 → 用 send_feishu 发卡片到每个 chat\n"
             "═══════════════════════════════════════\n"
             f"推送目标聊天ID：{chat_ids_str}\n"
+            "⚠️ 必须发两张卡片：\n"
+            "  卡片1：数学+英语题目\n"
+            "  卡片2：KET词汇测试（英英释义+语境填空，10题）\n"
             "卡片消息格式要求：\n"
             f"- ⚠️ 日期必须是今天：{datetime.now().strftime('%Y-%m-%d')}（{['周一','周二','周三','周四','周五','周六','周日'][datetime.now().weekday()]}），禁止用其他日期\n"
             "- 使用 interactive 卡片，header 用 orange 色\n"
             f"- 标题必须用「🐱 小肥猫今日学习任务（{datetime.now().strftime('%-m月%-d日')} {['周一','周二','周三','周四','周五','周六','周日'][datetime.now().weekday()]}）」\n"
+            "- 词汇卡片标题用「📖 今日KET词汇（{datetime.now().strftime('%-m月%-d日')}）」\n"
             "- 数学区用 📐 标识，英语区用 📖 标识\n"
             "- 每道题单独编号（如「第1题」「第2题」），方便小朋友回复\n"
             "- 末尾明确告诉小朋友：回复时请写「第X题答案是...」，可以拍照也可以打字\n"
@@ -637,16 +645,70 @@ def scheduled_weekly_test():
         _log(traceback.format_exc())
 
 
+def scheduled_daily_vocab():
+    """每日KET词汇推送：英英释义+语境填空，与单词训练营共享词库。"""
+    _log(f"[SCHEDULER] 执行每日词汇推送: {datetime.now()}")
+    poll_cfg = CFG.get("feishu", {}).get("poll", {})
+    target_chat_ids = poll_cfg.get("chat_ids", [])
+    if not target_chat_ids:
+        return
+    chat_ids_str = json.dumps(target_chat_ids, ensure_ascii=False)
+    try:
+        session = init_new_session()
+        result = run(
+            "请执行每日KET词汇推送。\n\n"
+            "═══════════════════════════════════════\n"
+            "第一步：读取词库\n"
+            "═══════════════════════════════════════\n"
+            "1. 读取 data/ket_vocabulary.json（如不存在则用 call_llm 从KET词表创建，至少50词）\n"
+            "2. 筛选：status='new'的选5个新词，status='learning'的选5个复习词\n\n"
+            "═══════════════════════════════════════\n"
+            "第二步：出题（KET风格，英英释义）\n"
+            "═══════════════════════════════════════\n"
+            "⚠️ 必须用英语解释英语，禁止出现中文！\n"
+            "新词5题（英英释义匹配）：\n"
+            "- 格式：给出英文释义，4个选项（同主题词），选正确单词\n"
+            "- 例：This is a fruit. It is red or green. You can eat it.\n"
+            "      A. bread  B. apple  C. chicken  D. rice\n"
+            "复习词5题（语境填空）：\n"
+            "- 格式：英文句子+英文提示，填单词\n"
+            "- 例：I drink _____ every morning. (a white drink from cows)\n\n"
+            "═══════════════════════════════════════\n"
+            "第三步：更新词库\n"
+            "═══════════════════════════════════════\n"
+            "- 将新词status改为'learning'，learned_date设为今天\n"
+            "- 将复习词review_count+1，如>=3则status改为'mastered'\n"
+            "- 用 write_file 更新 data/ket_vocabulary.json\n\n"
+            "═══════════════════════════════════════\n"
+            "第四步：推送\n"
+            "═══════════════════════════════════════\n"
+            f"推送目标：{chat_ids_str}\n"
+            f"标题：📖 今日KET词汇（{datetime.now().strftime('%-m月%-d日')}）\n"
+            "用 send_feishu 发送词汇卡片（10题：5新词+5复习）\n"
+            "⚠️ 必须调用 send_feishu 发送结果！",
+            session,
+        )
+        _log(f"[SCHEDULER] 词汇推送完成: {result[:200] if result else 'None'}")
+    except Exception as e:
+        _log(f"[SCHEDULER] 词汇推送失败: {e}")
+        _log(traceback.format_exc())
+
+
 def start_scheduler():
     push_time = CFG.get("education", {}).get("push_time", "09:00")
     hour, minute = map(int, push_time.split(":"))
     scheduler = BackgroundScheduler()
     scheduler.add_job(scheduled_daily_push, 'cron', hour=hour, minute=minute, id='daily_push')
     
-    # 每周日综合测试（复习本周+新内容）
+    # 每日词汇推送（比主推送晚5分钟，避免冲突）
+    vocab_minute = (minute + 5) % 60
+    vocab_hour = hour + (1 if minute + 5 >= 60 else 0)
+    scheduler.add_job(scheduled_daily_vocab, 'cron', hour=vocab_hour, minute=vocab_minute, id='daily_vocab')
+    
+    # 每周日综合测试
     scheduler.add_job(scheduled_weekly_test, 'cron', day_of_week='sun', hour=hour, minute=minute, id='weekly_test')
     
-    # 飞书消息轮询（内网无公网IP模式）
+    # 飞书消息轮询
     poll_cfg = CFG.get("feishu", {}).get("poll", {})
     if poll_cfg.get("enabled") and poll_cfg.get("chat_ids"):
         interval = poll_cfg.get("interval_seconds", 10)
@@ -654,7 +716,7 @@ def start_scheduler():
         print(f"[POLL] 飞书消息轮询已启动，间隔 {interval}s，监控 {len(poll_cfg['chat_ids'])} 个聊天")
     
     scheduler.start()
-    print(f"[SCHEDULER] 已启动，每日 {push_time} 推送，周日综合测试")
+    print(f"[SCHEDULER] 已启动，每日 {push_time} 推送 + 词汇 + 周日综合测试")
 
 
 # ══════════════════════════════════════════════════════════════════════
