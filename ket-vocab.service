@@ -1,0 +1,14 @@
+[Unit]
+Description=小肥猫 KET单词训练营
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/cat-learning
+ExecStart=/opt/venv/bin/python3 /opt/cat-learning/ket_vocab_server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

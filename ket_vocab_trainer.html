@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>🐱 小肥猫 KET 单词训练营</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:linear-gradient(135deg,#667eea,#764ba2);min-height:100vh;display:flex;justify-content:center;align-items:center;padding:20px}
+.container{max-width:600px;width:100%;background:#fff;border-radius:20px;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden}
+.header{background:linear-gradient(135deg,#ff9a56,#ff6b35);color:#fff;padding:24px;text-align:center}
+.header h1{font-size:24px;margin-bottom:4px}.header .sub{font-size:13px;opacity:.85}
+.tabs{display:flex;border-bottom:2px solid #eee}
+.tab{flex:1;padding:14px 8px;text-align:center;cursor:pointer;font-size:14px;font-weight:600;color:#999;border:none;background:none;transition:.2s}
+.tab.active{color:#ff6b35;border-bottom:3px solid #ff6b35;margin-bottom:-2px}
+.content{padding:24px;min-height:400px}
+.stats{display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap}
+.stat-card{flex:1;min-width:80px;background:#f8f9ff;border-radius:12px;padding:14px;text-align:center}
+.stat-card .num{font-size:28px;font-weight:700;color:#ff6b35}.stat-card .label{font-size:12px;color:#888;margin-top:4px}
+.btn{display:inline-block;padding:12px 28px;border-radius:25px;font-size:15px;font-weight:600;cursor:pointer;border:none;transition:.2s}
+.btn-primary{background:linear-gradient(135deg,#ff9a56,#ff6b35);color:#fff}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(255,107,53,.4)}
+.btn-outline{background:#fff;color:#ff6b35;border:2px solid #ff6b35}.btn-sm{padding:8px 16px;font-size:13px}
+.btn-group{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;justify-content:center}
+.word-card{background:#f8f9ff;border-radius:16px;padding:24px;text-align:center;margin-bottom:16px}
+.word-card .english{font-size:36px;font-weight:700;color:#333;margin-bottom:8px}
+.word-card .chinese{font-size:20px;color:#666;margin-bottom:4px}
+.word-card .example{font-size:14px;color:#888;font-style:italic;margin-top:8px;padding-top:8px;border-top:1px solid #eee}
+.progress-bar{height:8px;background:#eee;border-radius:4px;margin:16px 0;overflow:hidden}
+.progress-fill{height:100%;background:linear-gradient(90deg,#ff9a56,#ff6b35);border-radius:4px;transition:.3s}
+.result-box{background:#f8f9ff;border-radius:12px;padding:16px;margin-top:12px;text-align:center}
+.result-box .score{font-size:32px;font-weight:700;color:#ff6b35}
+.text-center{text-align:center}.mt-12{margin-top:12px}.mt-20{margin-top:20px}.mb-12{margin-bottom:12px}
+input[type=text]{width:100%;padding:12px 16px;border:2px solid #e0e0e0;border-radius:12px;font-size:16px;outline:none}
+input[type=text]:focus{border-color:#ff9a56}
+.word-list{max-height:300px;overflow-y:auto}
+.word-row{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:14px}
+.word-row .w{font-weight:600;color:#333}.word-row .c{color:#888}
+.tag{display:inline-block;padding:3px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.tag-mastered{background:#e8f5e9;color:#2e7d32}.tag-learning{background:#fff3e0;color:#e65100}.tag-new{background:#f3e5f5;color:#7b1fa2}
+.correct{color:#4caf50;font-weight:700}.wrong{color:#f44336;font-weight:700}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="header"><h1>🐱 小肥猫 KET 单词训练营</h1><div class="sub">每天10分钟，暑假拿下KET！</div></div>
+<div class="tabs">
+<button class="tab active" onclick="switchTab('home')">🏠 首页</button>
+<button class="tab" onclick="switchTab('test')">📝 词汇测试</button>
+<button class="tab" onclick="switchTab('daily')">📖 每日打卡</button>
+<button class="tab" onclick="switchTab('review')">🔄 复习</button>
+</div>
+<div class="content" id="content"></div>
+</div>
+<script>
+const API = '/api';
+let ts = {phase:'intro',current:0,words:[],results:[]};
+let ds = {phase:'intro',current:0,words:[],mode:''};
+
+async function fetchAPI(path, opts) {
+  const r = await fetch(API + path, opts);
+  return r.json();
+}
+
+function switchTab(t) {
+  document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(tab => {
+    if (tab.textContent.includes(t === 'home' ? '首页' : t === 'test' ? '词汇测试' : t === 'daily' ? '每日打卡' : '复习'))
+      tab.classList.add('active');
+  });
+  if (t === 'home') renderHome();
+  else if (t === 'test') renderTest();
+  else if (t === 'daily') renderDaily();
+  else renderReview();
+}
+
+async function renderHome() {
+  const s = await fetchAPI('/stats');
+  document.getElementById('content').innerHTML = `
+    <div class="stats">
+      <div class="stat-card"><div class="num">${s.total}</div><div class="label">总词汇量</div></div>
+      <div class="stat-card"><div class="num">${s.mastered}</div><div class="label">已掌握</div></div>
+      <div class="stat-card"><div class="num">${s.learning}</div><div class="label">学习中</div></div>
+      <div class="stat-card"><div class="num">${s.daily_streak}🔥</div><div class="label">连续打卡</div></div>
+    </div>
+    <div class="mb-12"><b>掌握进度</b> <span style="color:#ff6b35">${s.pct}%</span></div>
+    <div class="progress-bar"><div class="progress-fill" style="width:${s.pct}%"></div></div>
+    ${!s.test_done ? `
+    <div class="text-center mt-20"><p style="color:#888;margin-bottom:12px">🎯 先测测你的词汇基础吧！</p>
+    <button class="btn btn-primary" onclick="switchTab('test')">开始词汇测试</button></div>` : `
+    <div class="text-center mt-20">
+      <p style="color:#888;margin-bottom:4px">📊 上次测试：${s.test_date||'未知'} | 得分：${s.test_score}分</p>
+      ${s.today_done>0?`<p style="color:#4caf50">✅ 今日已打卡 ${s.today_done} 个单词</p>`:`<p style="color:#ff6b35">⚠️ 今天还没打卡哦～</p>`}
+      <div class="btn-group"><button class="btn btn-primary" onclick="switchTab('daily')">📖 每日打卡</button><button class="btn btn-outline" onclick="switchTab('review')">🔄 复习错词</button></div></div>`}
+    <div class="text-center mt-20"><button class="btn btn-outline btn-sm" onclick="exportUnknown()">📤 导出生词（给小猫老师）</button></div>`;
+}
+
+async function renderTest() {
+  if (ts.phase === 'intro') {
+    document.getElementById('content').innerHTML = `
+      <h3 style="margin-bottom:12px">📝 KET 词汇基础测试</h3>
+      <p style="color:#666;margin-bottom:16px">随机抽30个KET核心词，诚实选择是否认识。<br>测试约3-5分钟～</p>
+      <button class="btn btn-primary" onclick="startTest()">开始测试</button>`;
+    return;
+  }
+  if (ts.phase === 'testing') {
+    const w = ts.words[ts.current];
+    const p = Math.round((ts.current / ts.words.length) * 100);
+    document.getElementById('content').innerHTML = `
+      <div class="mb-12"><span style="font-size:13px;color:#888">第 ${ts.current+1}/${ts.words.length} 词</span></div>
+      <div class="progress-bar"><div class="progress-fill" style="width:${p}%"></div></div>
+      <div class="word-card"><div class="english">${w.w}</div><div class="chinese">${w.p} ${w.c}</div><div class="example">"${w.e}"</div></div>
+      <p style="text-align:center;color:#666;margin-bottom:12px">你认识这个单词吗？</p>
+      <div class="btn-group">
+        <button class="btn btn-outline" style="border-color:#4caf50;color:#4caf50" onclick="answerTest('yes')">✅ 认识</button>
+        <button class="btn btn-outline" style="border-color:#ff9800;color:#ff9800" onclick="answerTest('maybe')">🤔 不确定</button>
+        <button class="btn btn-outline" style="border-color:#f44336;color:#f44336" onclick="answerTest('no')">❌ 不认识</button></div>`;
+    return;
+  }
+  if (ts.phase === 'done') {
+    const kn = ts.results.filter(r => r.answer === 'yes').length;
+    const mb = ts.results.filter(r => r.answer === 'maybe').length;
+    const un = ts.results.filter(r => r.answer === 'no').length;
+    document.getElementById('content').innerHTML = `
+      <h3 style="text-align:center;margin-bottom:16px">🎉 测试完成！</h3>
+      <div class="result-box"><div class="score">${ts.score}分</div><p style="color:#666">预估词汇量：约 ${ts.vocab_estimate} 词</p></div>
+      <div class="stats mt-12">
+        <div class="stat-card"><div class="num" style="color:#4caf50">${kn}</div><div class="label">认识</div></div>
+        <div class="stat-card"><div class="num" style="color:#ff9800">${mb}</div><div class="label">不确定</div></div>
+        <div class="stat-card"><div class="num" style="color:#f44336">${un}</div><div class="label">不认识</div></div></div>
+      <p style="color:#888;font-size:13px;margin-top:12px">不认识/不确定的词已标记为"学习中"，<br>会在每日打卡和英语测试中重点复习～</p>
+      <div class="btn-group mt-12"><button class="btn btn-primary" onclick="switchTab('daily')">开始每日打卡</button><button class="btn btn-outline" onclick="switchTab('home')">返回首页</button></div>`;
+  }
+}
+
+async function startTest() {
+  const data = await fetchAPI('/test/start');
+  ts = {phase:'testing', current:0, words:data.words, results:[]};
+  renderTest();
+}
+
+async function answerTest(a) {
+  ts.results.push({w: ts.words[ts.current].w, answer: a});
+  ts.current++;
+  if (ts.current >= ts.words.length) {
+    const data = await fetchAPI('/test/submit', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({results:ts.results})});
+    ts.phase = 'done'; ts.score = data.score; ts.vocab_estimate = data.vocab_estimate;
+    renderTest();
+  } else { renderTest(); }
+}
+
+async function renderDaily() {
+  if (ds.phase === 'intro') {
+    const s = await fetchAPI('/stats');
+    document.getElementById('content').innerHTML = `
+      <h3 style="margin-bottom:12px">📖 每日单词打卡</h3>
+      ${s.today_done>0?`<p style="color:#4caf50;margin-bottom:12px">✅ 今日已打卡 ${s.today_done} 个单词</p>`:''}
+      <p style="color:#666;margin-bottom:16px">今天学习10个KET核心词～</p>
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="startDaily('en2cn')">🇬🇧→🇨🇳 英译中</button>
+        <button class="btn btn-outline" onclick="startDaily('cn2en')">🇨🇳→🇬🇧 中译英</button>
+        <button class="btn btn-outline" onclick="startDaily('spell')">✏️ 拼写练习</button></div>`;
+    return;
+  }
+  if (ds.phase === 'testing') {
+    const w = ds.words[ds.current];
+    const p = Math.round((ds.current / ds.words.length) * 100);
+    let qhtml = '';
+    if (ds.mode === 'en2cn') {
+      qhtml = `<div class="word-card"><div class="english">${w.w}</div><div class="example">"${w.e}"</div></div><p style="text-align:center;color:#666;margin-bottom:12px">这个单词的中文意思是？</p><input type="text" id="answerInput" placeholder="输入中文意思..." onkeydown="if(event.key==='Enter')checkDaily()"><div class="btn-group"><button class="btn btn-primary" onclick="checkDaily()">提交</button><button class="btn btn-outline btn-sm" onclick="showDailyAnswer()">看答案</button></div>`;
+    } else if (ds.mode === 'cn2en') {
+      qhtml = `<div class="word-card"><div class="chinese" style="font-size:28px">${w.c}</div><div class="example">"${w.e}"</div></div><p style="text-align:center;color:#666;margin-bottom:12px">这个中文对应的英文单词是？</p><input type="text" id="answerInput" placeholder="输入英文单词..." onkeydown="if(event.key==='Enter')checkDaily()"><div class="btn-group"><button class="btn btn-primary" onclick="checkDaily()">提交</button><button class="btn btn-outline btn-sm" onclick="showDailyAnswer()">看答案</button></div>`;
+    } else {
+      qhtml = `<div class="word-card"><div class="chinese" style="font-size:28px">${w.c}</div><div class="example">"${w.e.replace(w.w,'______')}"</div></div><p style="text-align:center;color:#666;margin-bottom:12px">请拼写这个单词：</p><input type="text" id="answerInput" placeholder="输入英文拼写..." onkeydown="if(event.key==='Enter')checkDaily()"><div class="btn-group"><button class="btn btn-primary" onclick="checkDaily()">提交</button><button class="btn btn-outline btn-sm" onclick="showDailyAnswer()">看答案</button></div>`;
+    }
+    document.getElementById('content').innerHTML = `
+      <div class="mb-12"><span style="font-size:13px;color:#888">第 ${ds.current+1}/${ds.words.length} 词 | ${ds.mode==='en2cn'?'英译中':ds.mode==='cn2en'?'中译英':'拼写'}</span></div>
+      <div class="progress-bar"><div class="progress-fill" style="width:${p}%"></div></div>${qhtml}
+      <div id="dailyFeedback" class="mt-12"></div>`;
+    return;
+  }
+  if (ds.phase === 'done') {
+    document.getElementById('content').innerHTML = `
+      <h3 style="text-align:center;margin-bottom:16px">🎉 今日打卡完成！</h3>
+      <div class="result-box"><p style="font-size:20px;color:#ff6b35">✅ 学习了 ${ds.words.length} 个单词</p></div>
+      <div class="btn-group mt-12"><button class="btn btn-primary" onclick="ds.phase='intro';renderDaily()">再来一轮</button><button class="btn btn-outline" onclick="switchTab('home')">返回首页</button></div>`;
+  }
+}
+
+async function startDaily(mode) {
+  const data = await fetchAPI('/daily/words');
+  ds = {phase:'testing', current:0, words:data.words, mode:mode};
+  renderDaily();
+}
+
+async function checkDaily() {
+  const input = document.getElementById('answerInput').value.trim();
+  const w = ds.words[ds.current];
+  let correct = false;
+  if (ds.mode === 'en2cn') correct = input.includes(w.c) || w.c.includes(input);
+  else if (ds.mode === 'cn2en') correct = input.toLowerCase() === w.w.toLowerCase();
+  else correct = input.toLowerCase() === w.w.toLowerCase();
+  await fetchAPI('/daily/submit', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({word:w.w,mode:ds.mode,correct})});
+  document.getElementById('dailyFeedback').innerHTML = correct
+    ? `<p class="correct">✅ 正确！${w.w} = ${w.c}</p>`
+    : `<p class="wrong">❌ 正确答案：${w.w} = ${w.c}</p><p style="color:#888;font-size:13px">例句：${w.e}</p>`;
+  setTimeout(() => { ds.current++; if(ds.current>=ds.words.length){ds.phase='done';renderDaily()}else renderDaily(); }, 1500);
+}
+
+function showDailyAnswer() {
+  const w = ds.words[ds.current];
+  document.getElementById('dailyFeedback').innerHTML = `<p style="color:#ff6b35">💡 答案：${w.w} = ${w.c}</p><p style="color:#888;font-size:13px">例句：${w.e}</p>`;
+  setTimeout(() => { ds.current++; if(ds.current>=ds.words.length){ds.phase='done';renderDaily()}else renderDaily(); }, 2000);
+}
+
+async function renderReview() {
+  const data = await fetchAPI('/review/words');
+  document.getElementById('content').innerHTML = `
+    <h3 style="margin-bottom:12px">🔄 复习错词（${data.words.length}个）</h3>
+    <div class="word-list">${data.words.map(w => `
+      <div class="word-row"><span class="w">${w.w}</span><span class="c">${w.c}</span><span class="tag ${w.status==='learning'?'tag-learning':'tag-new'}">${w.status==='learning'?'学习中':'新词'}</span><span style="font-size:12px;color:#aaa">复习${w.review_count}次</span></div>
+    `).join('')}</div>
+    <div class="btn-group mt-12"><button class="btn btn-primary" onclick="switchTab('daily')">去打卡复习</button><button class="btn btn-outline" onclick="switchTab('home')">返回首页</button></div>`;
+}
+
+async function exportUnknown() {
+  const data = await fetchAPI('/export/unknown');
+  alert(`已导出 ${data.count} 个生词！\n\n前5个：\n${data.text.split('\n').slice(0,5).join('\n')}\n\n完整数据可通过API获取`);
+}
+
+switchTab('home');
+</script>
+</body>
+</html>
