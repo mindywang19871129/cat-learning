@@ -110,11 +110,19 @@ def _save_session_to_file(session_key: str, session: Session):
 _FATI_KEYWORDS = ["发题", "新题", "做题", "来一套", "再来一套", "发一套", "再发", "做新题", "出题", "推送题目", "今日题目", "每日一练"]
 
 # ── 试卷编号生成 ──
+_test_id_counter = {}  # 按日期+前缀计数，防止重复
+
 def _gen_test_id(prefix="T"):
-    """生成唯一试卷编号，如 T0609A、V0609B、W0609C"""
-    import random, string
+    """生成唯一试卷编号，如 T0609A、V0609B。同一天同前缀不会重复。"""
     today = datetime.now().strftime("%m%d")
-    suffix = random.choice(string.ascii_uppercase)
+    key = f"{prefix}{today}"
+    count = _test_id_counter.get(key, 0)
+    _test_id_counter[key] = count + 1
+    # A-Z循环，超过26个用AA, AB...
+    if count < 26:
+        suffix = chr(ord('A') + count)
+    else:
+        suffix = chr(ord('A') + count // 26 - 1) + chr(ord('A') + count % 26)
     return f"{prefix}{today}{suffix}"
 
 
@@ -478,6 +486,13 @@ def _handle_feishu_event(event: dict):
 
         # ── 根据意图分发 ──
         if intent == "new_questions":
+            # ⚠️ 出题前检查：今天已有未完成题目则拦截
+            can_gen, reason = _check_today_questions_completed()
+            if not can_gen:
+                reply = f"🐱 {reason}哦～先把今天的题目完成，我会等你！回复时写「第X题答案是...」或试卷编号就可以啦～"
+                send_feishu(receive_id=reply_target, msg_type="text", content=reply)
+                _log(f"[INFO] 发题拦截(LLM意图): {reason}")
+                return
             result = run(
                 f"{context_prompt}\n"
                 f"学生要出新题：{text}\n\n"
