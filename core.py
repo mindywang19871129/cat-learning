@@ -618,13 +618,34 @@ def enhanced_ocr_image(image_path: str, use_llm_vision: bool = True) -> str:
 # ─── 工具 10：按日期查找历史题目 ───────────────────────────────────
 
 def find_questions(date_hint: str = "") -> str:
-    """按日期查找题目档案。date_hint 可为 '2026-05-29'/'29号'/'5月29日'/'0603'/'today'，不传返回所有存档列表。"""
+    """按日期或试卷编号查找题目。支持 '2026-05-29'/'29号'/'0603'/'T0609A'/'today'。"""
     import re
     questions_dir = DATA_DIR / "questions"
     questions_dir.mkdir(parents=True, exist_ok=True)
 
     today = datetime.now().strftime("%Y-%m-%d")
     files = sorted(questions_dir.glob("questions_*.json"), reverse=True)
+
+    # ── 先检查是否是试卷编号（如 T0609A、V0609B）──
+    if date_hint and re.match(r'^[TVW]\d{4}[A-Z]$', date_hint.strip()):
+        test_id = date_hint.strip()
+        # 搜索所有存档文件
+        all_files = list(questions_dir.glob("*.json"))
+        today_file = DATA_DIR / "today_questions.json"
+        if today_file.exists():
+            all_files.append(today_file)
+        for f in all_files:
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                if data.get("test_id") == test_id:
+                    qs = data.get("questions", data.get("math", []) + data.get("english", []) + data.get("vocab", []))
+                    return json.dumps({
+                        "success": True, "test_id": test_id,
+                        "date": data.get("date", ""), "file": str(f),
+                        "questions": qs,
+                    }, ensure_ascii=False)
+            except: pass
+        return json.dumps({"success": False, "error": f"未找到试卷 {test_id}"}, ensure_ascii=False)
 
     if not files and not (DATA_DIR / "today_questions.json").exists():
         return json.dumps({"success": False, "error": "没有找到任何题目存档"}, ensure_ascii=False)

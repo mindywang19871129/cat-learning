@@ -106,10 +106,16 @@ def _save_session_to_file(session_key: str, session: Session):
 # 飞书事件处理
 # ══════════════════════════════════════════════════════════════════════
 
-# ── 发题/新题 触发关键词 ──
+# ── 发题/新题 触发关键词（仅用于Python层快速拦截，不用于意图识别）──
 _FATI_KEYWORDS = ["发题", "新题", "做题", "来一套", "再来一套", "发一套", "再发", "做新题", "出题", "推送题目", "今日题目", "每日一练"]
-_WEEKLY_KEYWORDS = ["综合测试", "每周测试", "周测", "周末测试", "复习测试"]
-_VOCAB_KEYWORDS = ["词汇测试", "单词测试", "背单词", "词汇打卡", "单词打卡", "测词汇", "测单词", "词汇量", "复习单词", "生词"]
+
+# ── 试卷编号生成 ──
+def _gen_test_id(prefix="T"):
+    """生成唯一试卷编号，如 T0609A、V0609B、W0609C"""
+    import random, string
+    today = datetime.now().strftime("%m%d")
+    suffix = random.choice(string.ascii_uppercase)
+    return f"{prefix}{today}{suffix}"
 
 
 def _check_today_questions_completed():
@@ -397,108 +403,159 @@ def _handle_feishu_event(event: dict):
         )
         print(f"[INFO] 文件处理完成: {result[:100] if result else 'None'}")
     else:
-        # ── Python层快速预检：发题/新题意图 ──
-        # 不依赖LLM做拦截，保证一定有飞书回复
+        # ── Python层快速预检：发题/新题意图（仅拦截，不识别）──
         if _is_request_new_questions(text) and not _is_parent_adjust(text):
             can_gen, reason = _check_today_questions_completed()
             _log(f"[PRE-CHECK] 发题意图检测: can_gen={can_gen}, reason={reason}")
             if not can_gen:
-                # 题目未完成 → 直接发飞书回复，不走LLM（快速、可靠）
                 reply = f"🐱 {reason}哦～先把今天的题目完成，我会等你！回复时写「第X题答案是...」就可以啦～"
                 send_feishu(receive_id=reply_target, msg_type="text", content=reply)
                 _log(f"[INFO] 发题拦截: {reason} → 已直接回复飞书")
                 return
             _log(f"[PRE-CHECK] 题目已完成/无题目，交给LLM生成新题")
 
-        # 使用会话缓存，保持对话历史
         session = _get_or_create_session(sender_id, chat_id)
         
-        # 构建包含上下文的消息
-        user_message = f"{text}"
+        # ── 先检测试卷编号（如 T0609A、V0609B）→ 直接匹配 ──
+        import re
+        test_id_match = re.search(r'\b([TVW]\d{4}[A-Z])\b', text) if text else None
+        if test_id_match:
+            test_id = test_id_match.group(1)
+            # 查找所有试卷存档
+            all_tests = {}
+            questions_dir = DATA_DIR / "questions"
+            if questions_dir.exists():
+                for f in questions_dir.glob("*.json"):
+                    try:
+                        data = json.loads(f.read_text(encoding="utf-8"))
+                        tid = data.get("test_id", "")
+                        if tid:
+                            all_tests[tid] = {"file": str(f), "date": data.get("date", ""), "questions": data.get("questions", data.get("math", []) + data.get("english", []) + data.get("vocab", []))}
+                    except: pass
+            # 也检查 today_questions.json
+            today_file = DATA_DIR / "today_questions.json"
+            if today_file.exists():
+                try:
+                    data = json.loads(today_file.read_text(encoding="utf-8"))
+                    tid = data.get("test_id", "")
+                    if tid:
+                        all_tests[tid] = {"file": str(today_file), "date": data.get("date", ""), "questions": data.get("questions", data.get("math", []) + data.get("english", []) + data.get("vocab", []))}
+                except: pass
+            
+            if test_id in all_tests:
+                t = all_tests[test_id]
+                qs = t["questions"]
+                qs_summary = "\n".join([f"  {q['id']}: {q['question'][:100]}... | 答案:{q.get('answer','')}" for q in qs])
+                context_prompt += f"\n[📋 试卷 {test_id}（{t['date']}）：]\n{qs_summary}"
+            else:
+                context_prompt += f"\n[⚠️ 未找到试卷 {test_id}，请确认编号是否正确]"
+
+        # ── LLM意图识别（替代关键词枚举）──
+        intent_prompt = f"""请分析学生消息的意图，只回复一个JSON：
+{{"intent":"意图类型","detail":"补充说明"}}
+
+意图类型：
+- new_questions: 要出新题/发题/做题
+- grade_answer: 提交答案/批改（含第X题/答案是/选B/答案是apple等）
+- fix_questions: 题目有问题/不全/需要修正
+- weekly_test: 综合测试/周测
+- vocab_train: 词汇训练/背单词/单词测试/生词
+- parent_adjust: 家长调参（含密码）
+- chat: 普通对话/问候/其他
+
+学生消息：{text}
+
+只回复JSON，不要其他内容："""
+
+        try:
+            intent_resp = call_llm(intent_prompt)
+            intent_data = json.loads(intent_resp.strip().replace("```json","").replace("```","").strip())
+            intent = intent_data.get("intent", "chat")
+        except:
+            intent = "chat"
         
-        # 如果是答题批改，添加额外提示
-        if "第" in text and "题" in text and ("答案" in text or "答案是" in text):
-            # 已经在上面的context_prompt中添加了题目信息
-            pass
-        
-        # 检测"题目不全/重新检查/重新出题"等意图 → 强制走重新出题流程
-        _FIX_KEYWORDS = ["题目不全", "重新检查", "重新出题", "题不全", "检查题目", "题目有问题",
-                         "英语题不全", "完形填空不全", "语法题不全", "题目不完整", "选项不全",
-                         "没有原文", "没有选项", "题目有误", "题不对", "重新生成"]
-        if any(kw in text for kw in _FIX_KEYWORDS):
+        _log(f"[INTENT] LLM识别意图: {intent} ← '{text[:60]}'")
+
+        # ── 根据意图分发 ──
+        if intent == "new_questions":
+            result = run(
+                f"{context_prompt}\n"
+                f"学生要出新题：{text}\n\n"
+                f"请执行完整出题流程：\n"
+                f"1. 读adjustments/mastery/error_book/knowledge_map\n"
+                f"2. 读root.md「KET题型格式模板」+「KET词汇题格式」\n"
+                f"3. 读data/ket_vocabulary.json，生成KET风格词汇题（英英释义+语境填空，10题）\n"
+                f"4. 生成唯一试卷编号：test_id = \"{_gen_test_id('T')}\"\n"
+                f"5. 出题：数学4题+英语4题+词汇10题\n"
+                f"6. write_file存today_questions.json（含test_id字段！）\n"
+                f"7. write_file存data/questions/questions_{datetime.now().strftime('%Y-%m-%d')}.json归档\n"
+                f"8. send_feishu(receive_id=\"{reply_target}\")推送，卡片标题含「📋 编号：{_gen_test_id('T')}」\n"
+                f"⚠️ 每道题必须标注编号（如T0609A-1, T0609A-2...），方便学生回复时匹配！",
+                session,
+            )
+        elif intent == "grade_answer":
+            result = run(
+                f"{context_prompt}\n"
+                f"学生提交答案：{text}\n\n"
+                f"请执行批改流程：\n"
+                f"1. ⚠️ 先看上下文中有没有试卷编号（如T0609A）或日期提示\n"
+                f"2. 有编号→读对应试卷文件；有日期→find_questions；都没有→读today_questions.json\n"
+                f"3. 匹配题目（按题号或编号如T0609A-1）\n"
+                f"4. ⚠️ 如果答案与题目明显不符，不要直接判错！先send_feishu问是哪套题\n"
+                f"5. call_llm批改→更新mastery/error_book→send_feishu(receive_id=\"{reply_target}\")回复\n"
+                f"⚠️ 铁则：必须调用send_feishu发送结果！",
+                session,
+            )
+        elif intent == "fix_questions":
             result = run(
                 f"{context_prompt}\n"
                 f"学生反馈题目有问题：{text}\n\n"
-                f"请执行以下步骤（必须完成每一步）：\n"
-                f"1. 读取 data/today_questions.json 检查当前题目\n"
-                f"2. 用 call_llm 逐题检查完整性：\n"
-                f"   - 完形填空：必须有完整短文+空格+选项\n"
-                f"   - 语法填空：必须有完整句子+空格+选项\n"
-                f"   - 改错题：必须有完整句子+错误标注\n"
-                f"   - 写作题：必须有题目+范文\n"
-                f"3. 如有不完整的题目，用 call_llm 重新生成完整题目（必须包含原文和选项！）\n"
-                f"4. 用 write_file 更新 today_questions.json\n"
-                f"5. ⚠️ 必须调用 send_feishu(receive_id=\"{reply_target}\", ...) 发送修正后的完整题目！\n\n"
-                f"⚠️ 铁律：必须调用 send_feishu 发送结果，不能只修改文件不通知用户！",
+                f"1. 读today_questions.json检查完整性\n"
+                f"2. call_llm逐题检查（完形/填空/改错必须有原文+选项）\n"
+                f"3. 不完整的重新生成→write_file更新\n"
+                f"4. send_feishu(receive_id=\"{reply_target}\")发送修正结果\n"
+                f"⚠️ 必须调用send_feishu！",
                 session,
             )
-            return
-        
-        # 检测"综合测试/周测"意图 → 手动触发综合测试
-        if any(kw in text for kw in _WEEKLY_KEYWORDS):
+        elif intent == "weekly_test":
             result = run(
                 f"{context_prompt}\n"
                 f"学生请求综合测试：{text}\n\n"
-                f"请执行每周综合测试流程：\n"
-                f"1. 读取 data/error_book.json → 筛选本周错题\n"
-                f"2. 读取 data/mastery.json → 找到本周知识点\n"
-                f"3. 读取 KET备考计划.md → 确认当前阶段\n"
-                f"4. 出题：数学4题（2错题变式+2新内容）+ 英语6题（2错题变式+2新语法+2词汇检测）\n"
-                f"5. 生成本周KET词汇复习表（至少10个词）\n"
-                f"6. ⚠️ 必须调用 send_feishu(receive_id=\"{reply_target}\", ...) 发送综合测试卡片！\n\n"
-                f"⚠️ 铁则：必须调用 send_feishu 发送结果！",
+                f"1. 读error_book/mastery/KET备考计划\n"
+                f"2. 生成唯一编号：test_id = \"{_gen_test_id('W')}\"\n"
+                f"3. 出题：数学4题+英语6题+词汇10题\n"
+                f"4. write_file存储（含test_id）\n"
+                f"5. send_feishu(receive_id=\"{reply_target}\")推送，标题含「📋 编号：{_gen_test_id('W')}」",
                 session,
             )
-            return
-        
-        # 检测"词汇测试/背单词"等意图 → 飞书内词汇训练
-        if any(kw in text for kw in _VOCAB_KEYWORDS):
+        elif intent == "vocab_train":
             result = run(
                 f"{context_prompt}\n"
                 f"学生请求词汇训练：{text}\n\n"
-                f"请执行飞书内KET词汇训练流程：\n"
-                f"1. 读取 data/ket_vocabulary.json（如不存在则用 call_llm 从KET词表创建，至少50词）\n"
-                f"2. 根据学生意图选择模式：\n"
-                f"   - 「词汇测试」→ 随机抽10个生词，英英释义匹配（4选1）\n"
-                f"   - 「背单词」→ 5个新词+5个复习，英英释义+语境填空\n"
-                f"   - 「复习单词」→ 从已学词中抽10个，语境填空\n"
-                f"   - 「生词」→ 列出所有未掌握的单词\n"
-                f"3. ⚠️ 词汇题必须用英语解释英语，禁止中文！\n"
-                f"   格式：This is a fruit. It is red or green. You can eat it.\n"
-                f"         A. bread  B. apple  C. chicken  D. rice\n"
-                f"4. 用 send_feishu(receive_id=\"{reply_target}\", ...) 发送词汇卡片\n"
-                f"5. 更新 data/ket_vocabulary.json（标记已学/已掌握）\n\n"
-                f"⚠️ 铁则：必须调用 send_feishu 发送结果！",
+                f"1. 读data/ket_vocabulary.json\n"
+                f"2. 生成唯一编号：test_id = \"{_gen_test_id('V')}\"\n"
+                f"3. 出题：英英释义匹配+语境填空（全英文，禁止中文）\n"
+                f"4. write_file存储（含test_id）\n"
+                f"5. send_feishu(receive_id=\"{reply_target}\")推送，标题含「📋 编号：{_gen_test_id('V')}」",
                 session,
             )
-            return
-        
-        result = run(
-            f"{context_prompt}\n"
-            f"学生发来消息：{text}\n\n"
-            f"═══════════════════════════════════════\n"
-            f"请根据消息内容判断处理类型并执行：\n"
-            f"═══════════════════════════════════════\n\n"
-            f"类型A·家长调参（最高优先级）→ 消息含调参关键词+密码，读adjustments.json，用 send_feishu 确认\n"
-            f"类型B·发新题 → 消息含 发题/新题/做题/再来一套 等 → ⚠️先检查error_book.json前一天错题是否已订正（无reviewed_date则拦截）→ 读adjustments/mastery/error_book/knowledge_map → ⚠️先读root.md「KET题型格式模板」→ call_llm出题（填空/改错/完形必须含完整原文！数学题禁用水果/物品名，用图形或纯文字！）→ ⚠️同时读data/ket_vocabulary.json，生成KET风格词汇题（英英释义+语境填空，10题）→ write_file存today_questions.json（date必须={datetime.now().strftime('%Y-%m-%d')}，卡片标题日期必须={datetime.now().strftime('%-m月%-d日')} {['周一','周二','周三','周四','周五','周六','周日'][datetime.now().weekday()]}）→ ⚠️同时write_file存data/questions/questions_{datetime.now().strftime('%Y-%m-%d')}.json归档 → send_feishu推送两张卡片（题目卡+词汇卡）\n"
-            f"  出题标准：数学只出提升+拓展，复合应用60%+图形30%+拓展10%；KET写作35%+词汇25%+语法20%\n"
-            f"类型C·答题批改 → 消息含第X题/答案是/词汇题答案 → ⚠️先用find_questions按日期查找题目！有日期关键词（如'0603'、'29号'）就加date_hint参数 → 找到题目后call_llm批改 → ⚠️铁律：如果学生答案与题目明显不符，绝对不要直接判错！必须先用send_feishu问孩子是哪天的题 → 更新mastery/error_book → send_feishu回复\n"
-            f"类型E·词汇答题 → 消息含词汇题答案（如'第1题选B'、'答案是apple'）→ 读取data/ket_vocabulary.json核对答案 → 更新词库状态 → send_feishu回复结果\n"
-            f"类型D·普通对话 → 友好回复\n\n"
-            f"⚠️ 学生可能隔天回老题（如'29号第1题答案是XX'），必须用 find_questions(date_hint='29号') 查找，不要假设是今天的题！\n"
-            f"⚠️ 铁则：无论哪种类型，必须调用 send_feishu(receive_id=\"{reply_target}\", ...) 发送结果！",
-            session,
-        )
+        elif intent == "parent_adjust":
+            result = run(
+                f"{context_prompt}\n"
+                f"家长调参请求：{text}\n\n"
+                f"1. 验证密码→读adjustments.json\n"
+                f"2. 执行调整→write_file更新\n"
+                f"3. send_feishu(receive_id=\"{reply_target}\")确认",
+                session,
+            )
+        else:
+            result = run(
+                f"{context_prompt}\n"
+                f"学生发来消息：{text}\n\n"
+                f"请友好回复。如果是答题/出题/词汇等请求，自行判断并处理。\n"
+                f"⚠️ 必须调用 send_feishu(receive_id=\"{reply_target}\", ...) 发送结果！",
+                session,
+            )
         _log(f"[INFO] 文本处理完成: {result[:300] if result else 'None'}")
 
 
@@ -542,6 +599,12 @@ def scheduled_daily_push():
         _log("[SCHEDULER] 开始 LLM 出题流程...")
         result = run(
             "请执行完整的每日出题推送流程。\n\n"
+            "═══════════════════════════════════════\n"
+            "第零步：生成试卷编号\n"
+            "═══════════════════════════════════════\n"
+            f"test_id = \"{_gen_test_id('T')}\"\n"
+            "所有题目编号格式：{test_id}-1, {test_id}-2, ...\n"
+            "在卡片标题中显示「📋 编号：{test_id}」\n\n"
             "═══════════════════════════════════════\n"
             "第一步：读取数据\n"
             "═══════════════════════════════════════\n"
@@ -588,7 +651,7 @@ def scheduled_daily_push():
             "═══════════════════════════════════════\n"
             "第四步：存储 → 存入 data/today_questions.json\n"
             "═══════════════════════════════════════\n"
-            f"格式：{{\"date\":\"{datetime.now().strftime('%Y-%m-%d')}\",\"math\":[{{id,question,answer,hint,difficulty,topic_id}}],\"english\":[{{id,question,answer,hint,topic_id}}],\"vocab\":[{{id,question,answer,hint}}]}}\n\n"
+            f"格式：{{\"test_id\":\"{_gen_test_id('T')}\",\"date\":\"{datetime.now().strftime('%Y-%m-%d')}\",\"math\":[{{id,question,answer,hint,difficulty,topic_id}}],\"english\":[{{id,question,answer,hint,topic_id}}],\"vocab\":[{{id,question,answer,hint}}]}}\n\n"
             "═══════════════════════════════════════\n"
             "第五步：推送 → 用 send_feishu 发卡片到每个 chat\n"
             "═══════════════════════════════════════\n"
@@ -629,6 +692,12 @@ def scheduled_weekly_test():
         session = init_new_session()
         result = run(
             "请执行每周综合测试推送。\n\n"
+            "═══════════════════════════════════════\n"
+            "第零步：生成试卷编号\n"
+            "═══════════════════════════════════════\n"
+            f"test_id = \"{_gen_test_id('W')}\"\n"
+            "所有题目编号格式：{test_id}-1, {test_id}-2, ...\n"
+            "在卡片标题中显示「📋 编号：{test_id}」\n\n"
             "═══════════════════════════════════════\n"
             "第一步：读取本周数据\n"
             "═══════════════════════════════════════\n"
@@ -681,6 +750,12 @@ def scheduled_daily_vocab():
         session = init_new_session()
         result = run(
             "请执行每日KET词汇推送。\n\n"
+            "═══════════════════════════════════════\n"
+            "第零步：生成试卷编号\n"
+            "═══════════════════════════════════════\n"
+            f"test_id = \"{_gen_test_id('V')}\"\n"
+            "所有题目编号格式：{test_id}-1, {test_id}-2, ...\n"
+            "在卡片标题中显示「📋 编号：{test_id}」\n\n"
             "═══════════════════════════════════════\n"
             "第一步：读取词库\n"
             "═══════════════════════════════════════\n"
