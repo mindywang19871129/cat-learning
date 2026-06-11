@@ -118,12 +118,25 @@ def _gen_test_id(prefix="T"):
     key = f"{prefix}{today}"
     count = _test_id_counter.get(key, 0)
     _test_id_counter[key] = count + 1
-    # A-Z循环，超过26个用AA, AB...
     if count < 26:
         suffix = chr(ord('A') + count)
     else:
         suffix = chr(ord('A') + count // 26 - 1) + chr(ord('A') + count % 26)
     return f"{prefix}{today}{suffix}"
+
+# ── 全局题号生成（永不重复，跨重启持久化）──
+_QUESTION_COUNTER_FILE = DATA_DIR / ".question_counter"
+
+def _gen_question_id():
+    """生成全局唯一题号，如 Q000001。跨服务器重启不重复。"""
+    count = 1
+    if _QUESTION_COUNTER_FILE.exists():
+        try:
+            count = int(_QUESTION_COUNTER_FILE.read_text().strip()) + 1
+        except:
+            count = 1
+    _QUESTION_COUNTER_FILE.write_text(str(count))
+    return f"Q{count:06d}"
 
 
 def _check_today_questions_completed():
@@ -501,11 +514,12 @@ def _handle_feishu_event(event: dict):
                 f"2. 读root.md「KET题型格式模板」+「KET词汇题格式」\n"
                 f"3. 读data/ket_vocabulary.json，生成KET风格词汇题（英英释义+语境填空，10题）\n"
                 f"4. 生成唯一试卷编号：test_id = \"{_gen_test_id('T')}\"\n"
-                f"5. 出题：数学4题+英语4题+词汇10题\n"
-                f"6. write_file存today_questions.json（含test_id字段！）\n"
-                f"7. write_file存data/questions/questions_{datetime.now().strftime('%Y-%m-%d')}.json归档\n"
-                f"8. send_feishu(receive_id=\"{reply_target}\")推送，卡片标题含「📋 编号：{_gen_test_id('T')}」\n"
-                f"⚠️ 每道题必须标注编号（如T0609A-1, T0609A-2...），方便学生回复时匹配！",
+                f"5. 每道题用 _gen_question_id() 生成全局唯一编号（Q000001, Q000002...）\n"
+                f"6. 出题：数学4题+英语4题+词汇10题\n"
+                f"7. write_file存today_questions.json（含test_id和每道题的全局编号）\n"
+                f"8. write_file存data/questions/questions_{datetime.now().strftime('%Y-%m-%d')}.json归档\n"
+                f"9. send_feishu推送，卡片标题含「📋 试卷：{_gen_test_id('T')}」\n"
+                f"⚠️ 每道题显示全局编号（如Q000001），学生回复编号即可精准匹配！",
                 session,
             )
         elif intent == "grade_answer":
@@ -513,9 +527,9 @@ def _handle_feishu_event(event: dict):
                 f"{context_prompt}\n"
                 f"学生提交答案：{text}\n\n"
                 f"请执行批改流程：\n"
-                f"1. ⚠️ 先看上下文中有没有试卷编号（如T0609A）或日期提示\n"
-                f"2. 有编号→读对应试卷文件；有日期→find_questions；都没有→读today_questions.json\n"
-                f"3. 匹配题目（按题号或编号如T0609A-1）\n"
+                f"1. ⚠️ 先看上下文中有没有全局题号（如Q000001）或试卷编号（如T0609A）\n"
+                f"2. 有全局题号→直接匹配题目；有试卷编号→读对应文件；都没有→读today_questions.json\n"
+                f"3. 全局题号格式：Q+6位数字（如Q000001），跨所有试卷唯一\n"
                 f"4. ⚠️ 如果答案与题目明显不符，不要直接判错！先send_feishu问是哪套题\n"
                 f"5. call_llm批改→更新mastery/error_book\n"
                 f"6. ⚠️ 错题存入error_book.json时，必须包含试卷编号字段：\n"
@@ -619,11 +633,12 @@ def scheduled_daily_push():
         result = run(
             "请执行完整的每日出题推送流程。\n\n"
             "═══════════════════════════════════════\n"
-            "第零步：生成试卷编号\n"
+            "第零步：生成编号\n"
             "═══════════════════════════════════════\n"
             f"test_id = \"{_gen_test_id('T')}\"\n"
-            "所有题目编号格式：{test_id}-1, {test_id}-2, ...\n"
-            "在卡片标题中显示「📋 编号：{test_id}」\n\n"
+            "每道题用 _gen_question_id() 生成全局唯一编号（Q000001, Q000002...）\n"
+            "编号跨所有试卷永不重复，学生回复编号即可精准匹配\n"
+            "在卡片标题中显示「📋 试卷：{test_id}」\n\n"
             "═══════════════════════════════════════\n"
             "第一步：读取数据\n"
             "═══════════════════════════════════════\n"
@@ -714,11 +729,11 @@ def scheduled_weekly_test():
         result = run(
             "请执行每周综合测试推送。\n\n"
             "═══════════════════════════════════════\n"
-            "第零步：生成试卷编号\n"
+            "第零步：生成编号\n"
             "═══════════════════════════════════════\n"
             f"test_id = \"{_gen_test_id('W')}\"\n"
-            "所有题目编号格式：{test_id}-1, {test_id}-2, ...\n"
-            "在卡片标题中显示「📋 编号：{test_id}」\n\n"
+            "每道题用 _gen_question_id() 生成全局唯一编号\n"
+            "在卡片标题中显示「📋 试卷：{test_id}」\n\n"
             "═══════════════════════════════════════\n"
             "第一步：读取本周数据\n"
             "═══════════════════════════════════════\n"
@@ -772,11 +787,11 @@ def scheduled_daily_vocab():
         result = run(
             "请执行每日KET词汇推送。\n\n"
             "═══════════════════════════════════════\n"
-            "第零步：生成试卷编号\n"
+            "第零步：生成编号\n"
             "═══════════════════════════════════════\n"
             f"test_id = \"{_gen_test_id('V')}\"\n"
-            "所有题目编号格式：{test_id}-1, {test_id}-2, ...\n"
-            "在卡片标题中显示「📋 编号：{test_id}」\n\n"
+            "每道题用 _gen_question_id() 生成全局唯一编号\n"
+            "在卡片标题中显示「📋 试卷：{test_id}」\n\n"
             "═══════════════════════════════════════\n"
             "第一步：读取词库\n"
             "═══════════════════════════════════════\n"
