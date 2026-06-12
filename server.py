@@ -439,7 +439,7 @@ def _handle_feishu_event(event: dict):
         
         # ── 先检测试卷编号（如 T0609A、V0609B）→ 直接匹配 ──
         import re
-        test_id_match = re.search(r'\b([TVW]\d{4}[A-Z])\b', text) if text else None
+        test_id_match = re.search(r'\b([TVWC]\d{4}[A-Z])\b', text) if text else None
         if test_id_match:
             test_id = test_id_match.group(1)
             # 查找所有试卷存档
@@ -468,6 +468,24 @@ def _handle_feishu_event(event: dict):
                 qs = t["questions"]
                 qs_summary = "\n".join([f"  {q['id']}: {q['question'][:100]}... | 答案:{q.get('answer','')}" for q in qs])
                 context_prompt += f"\n[📋 试卷 {test_id}（{t['date']}）：]\n{qs_summary}"
+                
+                # ── 如果消息中同时有试卷编号和答案内容 → 直接批改，跳过意图识别 ──
+                has_answer_content = bool(re.search(r'[A-Da-d]\b|答案是|答案[：:]', text))
+                if has_answer_content:
+                    _log(f"[MATCH] 试卷{test_id}已找到+含答案，直接批改")
+                    result = run(
+                        f"{context_prompt}\n"
+                        f"学生提交了试卷 {test_id} 的答案：{text}\n\n"
+                        f"请直接批改：\n"
+                        f"1. 上面已经注入了试卷{test_id}的题目和标准答案\n"
+                        f"2. 按顺序匹配学生答案到对应题目\n"
+                        f"3. 逐题批改（✅/❌ + 解析）\n"
+                        f"4. 更新mastery/error_book\n"
+                        f"5. send_feishu(receive_id=\"{reply_target}\")发送批改结果\n"
+                        f"⚠️ 必须调用send_feishu！",
+                        session,
+                    )
+                    return
             else:
                 context_prompt += f"\n[⚠️ 未找到试卷 {test_id}，请确认编号是否正确]"
 
@@ -829,16 +847,70 @@ def scheduled_daily_vocab():
         _log(traceback.format_exc())
 
 
+def scheduled_daily_calc():
+    """每日数学计算专项：加减乘除+四则混合运算，重点练速度和准确度。"""
+    _log(f"[SCHEDULER] 执行每日计算专项: {datetime.now()}")
+    poll_cfg = CFG.get("feishu", {}).get("poll", {})
+    target_chat_ids = poll_cfg.get("chat_ids", [])
+    if not target_chat_ids:
+        return
+    chat_ids_str = json.dumps(target_chat_ids, ensure_ascii=False)
+    try:
+        session = init_new_session()
+        result = run(
+            "请执行每日数学计算专项推送。\n\n"
+            "═══════════════════════════════════════\n"
+            "第零步：生成编号\n"
+            "═══════════════════════════════════════\n"
+            f"test_id = \"{_gen_test_id('C')}\"\n"
+            "每道题用 _gen_question_id() 生成全局唯一编号\n"
+            "在卡片标题中显示「📋 试卷：{test_id}」\n\n"
+            "═══════════════════════════════════════\n"
+            "出题要求（纯计算，10题，适合小学生）：\n"
+            "═══════════════════════════════════════\n"
+            "- 两位数×一位数：2题（如 47×6=）\n"
+            "- 三位数÷一位数：2题（如 258÷3=）\n"
+            "- 三位数加减法：2题（如 456+278=, 803-267=）\n"
+            "- 四则混合运算：2题（如 25+36÷6=, (45-18)×3=）\n"
+            "- 连乘/连除：2题（如 12×3×2=, 96÷4÷2=）\n"
+            "- ⚠️ 纯计算题，不需要应用题，不需要图形\n"
+            "- 每道题给出标准答案\n"
+            "- 卡片标题：「🧮 今日计算专项（{datetime.now().strftime('%-m月%-d日')}）」\n"
+            "- 提示学生：限时10分钟完成，记录用时\n\n"
+            "═══════════════════════════════════════\n"
+            "存储\n"
+            "═══════════════════════════════════════\n"
+            f"用 write_file 存入 data/questions/questions_{datetime.now().strftime('%Y-%m-%d')}_calc.json\n"
+            f"格式：{{\"test_id\":\"{_gen_test_id('C')}\",\"date\":\"{datetime.now().strftime('%Y-%m-%d')}\",\"type\":\"calc\",\"questions\":[{{id,question,answer}}]}}\n\n"
+            "═══════════════════════════════════════\n"
+            "推送\n"
+            "═══════════════════════════════════════\n"
+            f"推送目标：{chat_ids_str}\n"
+            "用 send_feishu 发送计算卡片\n"
+            "⚠️ 必须调用 send_feishu 发送结果！",
+            session,
+        )
+        _log(f"[SCHEDULER] 计算专项完成: {result[:200] if result else 'None'}")
+    except Exception as e:
+        _log(f"[SCHEDULER] 计算专项失败: {e}")
+        _log(traceback.format_exc())
+
+
 def start_scheduler():
     push_time = CFG.get("education", {}).get("push_time", "09:00")
     hour, minute = map(int, push_time.split(":"))
     scheduler = BackgroundScheduler()
     scheduler.add_job(scheduled_daily_push, 'cron', hour=hour, minute=minute, id='daily_push')
     
-    # 每日词汇推送（比主推送晚5分钟，避免冲突）
+    # 每日词汇推送（比主推送晚5分钟）
     vocab_minute = (minute + 5) % 60
     vocab_hour = hour + (1 if minute + 5 >= 60 else 0)
     scheduler.add_job(scheduled_daily_vocab, 'cron', hour=vocab_hour, minute=vocab_minute, id='daily_vocab')
+    
+    # 每日计算专项（比词汇推送晚5分钟）
+    calc_minute = (vocab_minute + 5) % 60
+    calc_hour = vocab_hour + (1 if vocab_minute + 5 >= 60 else 0)
+    scheduler.add_job(scheduled_daily_calc, 'cron', hour=calc_hour, minute=calc_minute, id='daily_calc')
     
     # 每周日综合测试
     scheduler.add_job(scheduled_weekly_test, 'cron', day_of_week='sun', hour=hour, minute=minute, id='weekly_test')
