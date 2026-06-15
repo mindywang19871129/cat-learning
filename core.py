@@ -626,8 +626,8 @@ def find_questions(date_hint: str = "") -> str:
     today = datetime.now().strftime("%Y-%m-%d")
     files = sorted(questions_dir.glob("questions_*.json"), reverse=True)
 
-    # ── 先检查是否是试卷编号（如 T0609A、V0609B）──
-    if date_hint and re.match(r'^[TVW]\d{4}[A-Z]$', date_hint.strip()):
+    # ── 先检查是否是试卷编号（如 T0609A、V0609B、C0609A）──
+    if date_hint and re.match(r'^[TVWC]\d{4}[A-Z]$', date_hint.strip()):
         test_id = date_hint.strip()
         # 搜索所有存档文件
         all_files = list(questions_dir.glob("*.json"))

@@ -294,29 +294,52 @@ def _handle_feishu_event(event: dict):
     import re
     date_match = None
     date_hint = None
+    test_id_in_text = None
     if text:
-        # 匹配 "0603" / "6月3日" / "6.3" / "29号" / "2026-06-03" 等格式
-        m = re.search(r'(\d{1,2})\s*[月.\-]\s*(\d{1,2})\s*[日号]?', text)
-        if m:
-            date_hint = f"{m.group(1)}月{m.group(2)}日"
-            date_match = m
+        # ⚠️ 优先检测试卷编号（如 T0612A、V0611A）— 最精确
+        tid_m = re.search(r'\b([TVWC]\d{4}[A-Z])\b', text)
+        if tid_m:
+            test_id_in_text = tid_m.group(1)
+            date_hint = test_id_in_text
+            date_match = tid_m
         else:
-            # 匹配 "0603" 纯数字格式（4位MMDD，后面可能跟中文）
-            m = re.search(r'(?<!\d)(\d{2})(\d{2})(?!\d)', text)
+            # 匹配 "0603" / "6月3日" / "6.3" / "29号" / "2026-06-03" 等格式
+            m = re.search(r'(\d{1,2})\s*[月.\-]\s*(\d{1,2})\s*[日号]?', text)
             if m:
-                month, day = int(m.group(1)), int(m.group(2))
-                if 1 <= month <= 12 and 1 <= day <= 31:
-                    date_hint = f"{month}月{day}日"
-                    date_match = m
+                date_hint = f"{m.group(1)}月{m.group(2)}日"
+                date_match = m
             else:
-                # 匹配 "29号" / "3日" 等
-                m = re.search(r'(\d{1,2})\s*[日号]', text)
+                # 匹配 "0603" 纯数字格式（4位MMDD，后面可能跟中文）
+                m = re.search(r'(?<!\d)(\d{2})(\d{2})(?!\d)', text)
                 if m:
-                    date_hint = m.group(0)
-                    date_match = m
-    has_answer_keyword = text and ("第" in text and "题" in text and ("答案" in text or "答案是" in text or "错题" in text or "不会" in text))
+                    month, day = int(m.group(1)), int(m.group(2))
+                    if 1 <= month <= 12 and 1 <= day <= 31:
+                        date_hint = f"{month}月{day}日"
+                        date_match = m
+                else:
+                    # 匹配 "29号" / "3日" 等
+                    m = re.search(r'(\d{1,2})\s*[日号]', text)
+                    if m:
+                        date_hint = m.group(0)
+                        date_match = m
     
-    if date_match and has_answer_keyword:
+    # 检测答题相关关键词（含"答案"、"的答案"、试卷编号等）
+    has_answer = text and ("答案" in text or "的答案" in text or "第" in text)
+    has_answer_keyword = has_answer
+    
+    # 如果有试卷编号，直接按编号找题
+    if test_id_in_text and has_answer:
+        try:
+            questions_data = json.loads(find_questions(date_hint=test_id_in_text))
+            if questions_data.get("success"):
+                qs = questions_data.get("questions", [])
+                qs_summary = "\n".join([f"  {q['id']}: {q['question'][:100]}... | 答案:{q.get('answer','')}" for q in qs])
+                context_prompt += f"\n[📋 试卷 {test_id_in_text}（{questions_data.get('date','')}）：]\n{qs_summary}"
+            else:
+                context_prompt += f"\n[⚠️ 未找到试卷 {test_id_in_text}]"
+        except Exception:
+            pass
+    elif date_match and has_answer_keyword:
         try:
             questions_data = json.loads(find_questions(date_hint=date_hint))
             if questions_data.get("success"):
@@ -328,8 +351,10 @@ def _handle_feishu_event(event: dict):
         except Exception:
             pass
     
-    # 通用答题批改上下文
-    if has_answer_keyword and not date_match:
+    # 通用答题批改上下文（无日期/编号时）
+    if (test_id_in_text or date_match) and has_answer:
+        pass  # 已在上方处理
+    elif has_answer:
         try:
             today_file = DATA_DIR / "today_questions.json"
             if today_file.exists():
@@ -355,19 +380,19 @@ def _handle_feishu_event(event: dict):
         result = run(
             f"{context_prompt}\n"
             f"学生发来一张图片（手写答案），已保存到 {local_path}。\n\n"
-            f"请严格按照 root.md「图片处理」流程执行：\n"
-            f"0. ⚠️ 先看上下文中有没有日期提示（如'29号'），有日期就用 find_questions 查找历史题目\n"
-            f"1. 用 ocr_image 识别（一次即可，使用增强版LLM视觉能力）\n"
-            f"2. 不管 confidence_hint 是多少，都必须用 call_llm 做【第1轮清理】→【第2轮结构化】→【第3轮交叉验证】\n"
-            f"3. 三轮增强后如有[疑似]项>30%，用 send_feishu 请学生确认\n"
-            f"4. 确认后按批改流程（find_questions查题目→call_llm批改→更新mastery/error_book→send_feishu发送结果）\n\n"
-            f"⚠️ 关键约束：\n"
-            f"- 批改前必须用 find_questions 查找对应日期的题目！\n"
-            f"- 绝对不要用 bash 执行本地OCR脚本\n"
-            f"- ocr_image 只调用1次（已升级为LLM视觉增强版）\n"
-            f"- 必须走完3轮LLM增强再决定是否需要确认\n"
-            f"- 如果图片中是答题，请记住题目和答案的对应关系\n"
-            f"- receive_id 用 \"{reply_target}\"",
+            f"请严格执行以下步骤：\n"
+            f"0. ⚠️ 先看上下文中有没有试卷编号（如T0612A）或日期提示\n"
+            f"1. 如果有试卷编号 → 直接用 find_questions(date_hint=\"试卷编号\") 查到题目和标准答案\n"
+            f"2. 用 ocr_image 识别图片文字\n"
+            f"3. 用 call_llm 做3轮增强（清理噪音→结构化提取→交叉验证）\n"
+            f"4. ⚠️ 把OCR结果按题号与上面找到的题目逐题匹配\n"
+            f"5. ⚠️ 如果图片中有题号（如1. 2. 3.），按题号匹配到对应题目\n"
+            f"6. ⚠️ 如果学生答案与标准答案一致→✅，不一致→❌，都给出解析\n"
+            f"7. 更新mastery/error_book\n"
+            f"8. send_feishu(receive_id=\"{reply_target}\")发送批改结果\n\n"
+            f"⚠️ 铁则：上下文已有试卷编号时，就用该编号找题，不要自己猜日期！\n"
+            f"⚠️ 铁则：匹配时按题号对应，不是按顺序！\n"
+            f"⚠️ ocr_image 只调用1次！",
             session,
         )
         print(f"[INFO] 图片处理完成: {result[:100] if result else 'None'}")
