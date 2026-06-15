@@ -364,6 +364,28 @@ def _handle_feishu_event(event: dict):
         except Exception as e:
             print(f"[INFO] 读取今日题目失败: {e}")
 
+    # ── 统一答案匹配（文本/图片都适用）──
+    is_answering = bool(has_answer or test_id_in_text or "📋 试卷" in context_prompt or "历史题目" in context_prompt)
+
+    if is_answering and msg_type != "image":
+        session = _get_or_create_session(sender_id, chat_id)
+        result = run(
+            f"{context_prompt}\n"
+            f"学生提交答案：{text}\n\n"
+            f"上方已给出试卷的题目和标准答案。请直接匹配批改。\n"
+            f"答案格式支持：\n"
+            f"- 全局题号+答案: Q000001 174\n"
+            f"- 题号+答案: 第1题174 / 1.174 / 1)174\n"
+            f"- 逗号/空格分隔: 174, 140, 21\n"
+            f"- 混合: 1.174 2.140 3.21\n\n"
+            f"逐题批改→更新mastery/error_book→send_feishu(receive_id=\"{reply_target}\")",
+            session,
+        )
+        return
+        )
+        _log(f"[INFO] 答案匹配完成: {result[:200] if result else 'None'}")
+        return
+
     if msg_type == "image":
         image_key = content.get("image_key", "")
         if not image_key:
@@ -380,19 +402,12 @@ def _handle_feishu_event(event: dict):
         result = run(
             f"{context_prompt}\n"
             f"学生发来一张图片（手写答案），已保存到 {local_path}。\n\n"
-            f"请严格执行以下步骤：\n"
-            f"0. ⚠️ 先看上下文中有没有试卷编号（如T0612A）或日期提示\n"
-            f"1. 如果有试卷编号 → 直接用 find_questions(date_hint=\"试卷编号\") 查到题目和标准答案\n"
-            f"2. 用 ocr_image 识别图片文字\n"
-            f"3. 用 call_llm 做3轮增强（清理噪音→结构化提取→交叉验证）\n"
-            f"4. ⚠️ 把OCR结果按题号与上面找到的题目逐题匹配\n"
-            f"5. ⚠️ 如果图片中有题号（如1. 2. 3.），按题号匹配到对应题目\n"
-            f"6. ⚠️ 如果学生答案与标准答案一致→✅，不一致→❌，都给出解析\n"
-            f"7. 更新mastery/error_book\n"
-            f"8. send_feishu(receive_id=\"{reply_target}\")发送批改结果\n\n"
-            f"⚠️ 铁则：上下文已有试卷编号时，就用该编号找题，不要自己猜日期！\n"
-            f"⚠️ 铁则：匹配时按题号对应，不是按顺序！\n"
-            f"⚠️ ocr_image 只调用1次！",
+            f"步骤1：用 ocr_image 识别图片文字\n"
+            f"步骤2：⚠️ 上下文已有试卷题目和标准答案，直接按题号逐题匹配\n"
+            f"步骤3：逐题批改（✅/❌ + 解析）\n"
+            f"步骤4：更新mastery/error_book\n"
+            f"步骤5：send_feishu(receive_id=\"{reply_target}\")发送批改结果\n\n"
+            f"铁则：按题号匹配，不按顺序猜！ocr_image只调用1次！",
             session,
         )
         print(f"[INFO] 图片处理完成: {result[:100] if result else 'None'}")
