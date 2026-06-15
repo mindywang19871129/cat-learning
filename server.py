@@ -297,7 +297,7 @@ def _handle_feishu_event(event: dict):
     test_id_in_text = None
     if text:
         # ⚠️ 优先检测试卷编号（如 T0612A、V0611A）— 最精确
-        tid_m = re.search(r'\b([TVWC]\d{4}[A-Z])\b', text)
+        tid_m = re.search(r'(?<![A-Za-z0-9])([TVWC]\d{4}[A-Z])(?![A-Za-z0-9])', text)
         if tid_m:
             test_id_in_text = tid_m.group(1)
             date_hint = test_id_in_text
@@ -324,7 +324,7 @@ def _handle_feishu_event(event: dict):
                         date_match = m
     
     # 检测答题相关关键词（含"答案"、"的答案"、试卷编号等）
-    has_answer = text and ("答案" in text or "的答案" in text or "第" in text)
+    has_answer = text and ("答案" in text or "的答案" in text or "第" in text or re.search(r'Q\d{6}', text))
     has_answer_keyword = has_answer
     
     # 如果有试卷编号，直接按编号找题
