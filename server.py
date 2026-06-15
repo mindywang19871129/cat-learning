@@ -409,7 +409,7 @@ def _handle_feishu_event(event: dict):
             session,
         )
         print(f"[INFO] 图片处理完成: {result[:100] if result else 'None'}")
-    elif msg_type == "file":
+        return  # ⚠️ 重要：图片处理完必须返回，否则往下走会重复处理文本！
         # ── 文件上传处理（教材PDF/文档等）──
         file_key = content.get("file_key", "")
         file_name = content.get("file_name", "unknown")
@@ -461,6 +461,7 @@ def _handle_feishu_event(event: dict):
             init_new_session(),
         )
         print(f"[INFO] 文件处理完成: {result[:100] if result else 'None'}")
+        return  # ⚠️ 文件处理完必须返回
     else:
         # ── Python层快速预检：发题/新题意图（仅拦截，不识别）──
         if _is_request_new_questions(text) and not _is_parent_adjust(text):
