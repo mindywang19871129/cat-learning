@@ -381,8 +381,6 @@ def _handle_feishu_event(event: dict):
             f"逐题批改→更新mastery/error_book→send_feishu(receive_id=\"{reply_target}\")",
             session,
         )
-        return
-        )
         _log(f"[INFO] 答案匹配完成: {result[:200] if result else 'None'}")
         return
 
