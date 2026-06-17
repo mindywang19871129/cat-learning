@@ -335,6 +335,7 @@ def _handle_feishu_event(event: dict):
     _text_no_testid = text.replace(test_id_in_text, "") if test_id_in_text else text
     _has_real_answer_content = bool(re.search(r'(?<!\d)\d{2,}(?!\d)|[A-Da-d]\b|Q\d{6}', _text_no_testid))
     if _is_recheck_only and not _has_real_answer_content:
+        _log(f"[DETECT] 假答案检测: has_answer降级, text={text[:60]}, test_id={test_id_in_text}")
         has_answer = False  # 降级为非答案消息，走正常意图识别
     
     # 如果有试卷编号，直接按编号找题（不管是否有答案关键词，先注入题目）
@@ -524,6 +525,8 @@ def _handle_feishu_event(event: dict):
                         all_tests[tid] = {"file": str(today_file), "date": data.get("date", ""), "questions": data.get("questions", data.get("math", []) + data.get("english", []) + data.get("vocab", []))}
                 except: pass
             
+            _log(f"[DEBUG] test_id={test_id}, found_in_archives={test_id in all_tests}, all_keys={list(all_tests.keys())[:10]}")
+            
             if test_id in all_tests:
                 t = all_tests[test_id]
                 qs = t["questions"]
@@ -547,7 +550,29 @@ def _handle_feishu_event(event: dict):
                         session,
                     )
                     return
+                
+                # ── recheck场景：试卷找到 + 要求重新批改图片 → 直接处理，跳过LLM意图识别 ──
+                if _is_recheck_only:
+                    _log(f"[RECHECK] 试卷{test_id}已找到，recheck场景直接处理")
+                    result = run(
+                        f"{context_prompt}\n"
+                        f"学生说：{text}\n\n"
+                        f"⚠️ 学生之前发过图片答案（手写），现在要求重新批改试卷 {test_id}。\n"
+                        f"上下文已注入试卷 {test_id} 的题目和标准答案。\n"
+                        f"请执行：\n"
+                        f"1. 检查会话历史中是否有之前的OCR识别结果（enhanced_ocr_image的输出）\n"
+                        f"2. 如果有→直接用之前的识别结果匹配批改\n"
+                        f"3. 如果没有→send_feishu告知学生'请重新发送图片，我来批改'\n"
+                        f"4. 逐题批改（✅/❌ + 解析）\n"
+                        f"5. 更新mastery/error_book\n"
+                        f"6. send_feishu(receive_id=\"{reply_target}\")发送批改结果\n"
+                        f"⚠️ 必须调用send_feishu！",
+                        session,
+                    )
+                    _log(f"[RECHECK] 处理完成: {result[:200] if result else 'None'}")
+                    return
             else:
+                _log(f"[WARN] 试卷{test_id}未找到，可用: {list(all_tests.keys())[:10]}")
                 context_prompt += f"\n[⚠️ 未找到试卷 {test_id}，请确认编号是否正确]"
 
         # ── LLM意图识别（替代关键词枚举）──
