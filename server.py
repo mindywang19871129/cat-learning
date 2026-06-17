@@ -327,6 +327,16 @@ def _handle_feishu_event(event: dict):
     has_answer = text and ("答案" in text or "的答案" in text or "第" in text or re.search(r'Q\d{6}', text))
     has_answer_keyword = has_answer
     
+    # ⚠️ 排除"假答案"：消息含"答案"但实际是要求重新批改图片（非提交答案）
+    # 如："V0616A的答案前面也已经给过图片了，你再看一下"
+    _recheck_kw = ["再看", "重新", "前面", "已经给过", "图片"]
+    _is_recheck_only = has_answer and test_id_in_text and any(kw in text for kw in _recheck_kw)
+    # 检查是否真的包含答案内容（排除试卷编号后的数字、字母选项、Q编号等）
+    _text_no_testid = text.replace(test_id_in_text, "") if test_id_in_text else text
+    _has_real_answer_content = bool(re.search(r'(?<!\d)\d{2,}(?!\d)|[A-Da-d]\b|Q\d{6}', _text_no_testid))
+    if _is_recheck_only and not _has_real_answer_content:
+        has_answer = False  # 降级为非答案消息，走正常意图识别
+    
     # 如果有试卷编号，直接按编号找题（不管是否有答案关键词，先注入题目）
     if test_id_in_text:
         try:
@@ -369,6 +379,9 @@ def _handle_feishu_event(event: dict):
     is_answering = bool(has_answer or "📋 试卷" in context_prompt or "历史题目" in context_prompt)
     # 有试卷编号但无答案内容 → 注入题目到上下文，走正常LLM意图识别
     if test_id_in_text and not has_answer:
+        is_answering = False
+    # ⚠️ 排除"再看一下图片"类消息：有试卷编号+题目已注入，但无实际答案内容
+    if _is_recheck_only and not _has_real_answer_content:
         is_answering = False
 
     if is_answering and msg_type != "image":
