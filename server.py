@@ -327,8 +327,8 @@ def _handle_feishu_event(event: dict):
     has_answer = text and ("答案" in text or "的答案" in text or "第" in text or re.search(r'Q\d{6}', text))
     has_answer_keyword = has_answer
     
-    # 如果有试卷编号，直接按编号找题
-    if test_id_in_text and has_answer:
+    # 如果有试卷编号，直接按编号找题（不管是否有答案关键词，先注入题目）
+    if test_id_in_text:
         try:
             questions_data = json.loads(find_questions(date_hint=test_id_in_text))
             if questions_data.get("success"):
@@ -365,7 +365,11 @@ def _handle_feishu_event(event: dict):
             print(f"[INFO] 读取今日题目失败: {e}")
 
     # ── 统一答案匹配（文本/图片都适用）──
-    is_answering = bool(has_answer or test_id_in_text or "📋 试卷" in context_prompt or "历史题目" in context_prompt)
+    # ⚠️ 只有明确含答案内容时才走批改流程；仅有试卷编号无答案内容 → 走正常意图识别
+    is_answering = bool(has_answer or "📋 试卷" in context_prompt or "历史题目" in context_prompt)
+    # 有试卷编号但无答案内容 → 注入题目到上下文，走正常LLM意图识别
+    if test_id_in_text and not has_answer:
+        is_answering = False
 
     if is_answering and msg_type != "image":
         session = _get_or_create_session(sender_id, chat_id)
@@ -547,6 +551,7 @@ def _handle_feishu_event(event: dict):
 - chat: 普通对话/问候/其他
 
 学生消息：{text}
+{"⚠️ 上下文已注入试卷题目，如果学生说'再看一下'/'重新批改'/'前面给过图片'等，意图应为grade_answer（重新批改之前的图片答案）" if test_id_in_text else ""}
 
 只回复JSON，不要其他内容："""
 
@@ -585,22 +590,41 @@ def _handle_feishu_event(event: dict):
                 session,
             )
         elif intent == "grade_answer":
-            result = run(
-                f"{context_prompt}\n"
-                f"学生提交答案：{text}\n\n"
-                f"请执行批改流程：\n"
-                f"1. ⚠️ 先看上下文中有没有全局题号（如Q000001）或试卷编号（如T0609A）\n"
-                f"2. 有全局题号→直接匹配题目；有试卷编号→读对应文件；都没有→读today_questions.json\n"
-                f"3. 全局题号格式：Q+6位数字（如Q000001），跨所有试卷唯一\n"
-                f"4. ⚠️ 如果答案与题目明显不符，不要直接判错！先send_feishu问是哪套题\n"
-                f"5. call_llm批改→更新mastery/error_book\n"
-                f"6. ⚠️ 错题存入error_book.json时，必须包含试卷编号字段：\n"
-                f"   {{\"id\":\"E{datetime.now().strftime('%m%d')}01\",\"test_id\":\"原试卷编号\",\"date\":\"{datetime.now().strftime('%Y-%m-%d')}\",\"question\":\"...\",\"student_answer\":\"...\",\"correct_answer\":\"...\",\"error_type\":\"...\",\"reviewed_date\":null}}\n"
-                f"   错题编号格式：E+MMDD+序号，如E060901\n"
-                f"7. send_feishu(receive_id=\"{reply_target}\")回复批改结果\n"
-                f"⚠️ 铁则：必须调用send_feishu发送结果！",
-                session,
-            )
+            # 检测是否是"再看一下图片"类请求（无新答案内容，要求重新批改之前的图片）
+            is_recheck = not has_answer and test_id_in_text and ("再看" in text or "重新" in text or "图片" in text or "前面" in text)
+            if is_recheck:
+                result = run(
+                    f"{context_prompt}\n"
+                    f"学生说：{text}\n\n"
+                    f"⚠️ 学生之前发过图片答案（手写），现在要求重新批改。\n"
+                    f"上下文已注入试卷 {test_id_in_text} 的题目和标准答案。\n"
+                    f"请执行：\n"
+                    f"1. 检查会话历史中是否有之前的OCR识别结果（enhanced_ocr_image的输出）\n"
+                    f"2. 如果有→直接用之前的识别结果匹配批改\n"
+                    f"3. 如果没有→send_feishu告知学生'请重新发送图片，我来批改'\n"
+                    f"4. 逐题批改（✅/❌ + 解析）\n"
+                    f"5. 更新mastery/error_book\n"
+                    f"6. send_feishu(receive_id=\"{reply_target}\")发送批改结果\n"
+                    f"⚠️ 必须调用send_feishu！",
+                    session,
+                )
+            else:
+                result = run(
+                    f"{context_prompt}\n"
+                    f"学生提交答案：{text}\n\n"
+                    f"请执行批改流程：\n"
+                    f"1. ⚠️ 先看上下文中有没有全局题号（如Q000001）或试卷编号（如T0609A）\n"
+                    f"2. 有全局题号→直接匹配题目；有试卷编号→读对应文件；都没有→读today_questions.json\n"
+                    f"3. 全局题号格式：Q+6位数字（如Q000001），跨所有试卷唯一\n"
+                    f"4. ⚠️ 如果答案与题目明显不符，不要直接判错！先send_feishu问是哪套题\n"
+                    f"5. call_llm批改→更新mastery/error_book\n"
+                    f"6. ⚠️ 错题存入error_book.json时，必须包含试卷编号字段：\n"
+                    f"   {{\"id\":\"E{datetime.now().strftime('%m%d')}01\",\"test_id\":\"原试卷编号\",\"date\":\"{datetime.now().strftime('%Y-%m-%d')}\",\"question\":\"...\",\"student_answer\":\"...\",\"correct_answer\":\"...\",\"error_type\":\"...\",\"reviewed_date\":null}}\n"
+                    f"   错题编号格式：E+MMDD+序号，如E060901\n"
+                    f"7. send_feishu(receive_id=\"{reply_target}\")回复批改结果\n"
+                    f"⚠️ 铁则：必须调用send_feishu发送结果！",
+                    session,
+                )
         elif intent == "fix_questions":
             result = run(
                 f"{context_prompt}\n"
@@ -1281,6 +1305,55 @@ def health():
         "poll_enabled": poll_cfg.get("enabled", False),
         "poll_chats": len(poll_cfg.get("chat_ids", [])),
     })
+
+
+@app.route("/debug/logs", methods=["GET"])
+def debug_logs():
+    """查看最近的服务日志（调试用）。"""
+    lines = request.args.get("lines", 50, type=int)
+    try:
+        result = bash(f"journalctl -u cat-learning --no-pager -n {lines} 2>/dev/null || echo 'journalctl not available'")
+        return jsonify({"code": 0, "logs": result})
+    except Exception as e:
+        return jsonify({"code": -1, "error": str(e)})
+
+
+@app.route("/debug/session", methods=["GET"])
+def debug_session():
+    """查看当前活跃的会话缓存（调试用）。"""
+    sender_id = request.args.get("sender_id", "")
+    chat_id = request.args.get("chat_id", "")
+    if sender_id:
+        session_key = f"{sender_id}:{chat_id}" if chat_id else sender_id
+        if session_key in SESSION_CACHE:
+            session, last_active = SESSION_CACHE[session_key]
+            history_summary = [{"role": m.get("role"), "content": str(m.get("content",""))[:200]} for m in session.history[-10:]]
+            return jsonify({
+                "code": 0, "found": True,
+                "session_key": session_key,
+                "last_active": datetime.fromtimestamp(last_active).isoformat(),
+                "history_length": len(session.history),
+                "recent_history": history_summary,
+            })
+        return jsonify({"code": 0, "found": False, "session_key": session_key})
+    # 列出所有活跃会话
+    sessions = {}
+    for key, (session, last_active) in SESSION_CACHE.items():
+        sessions[key] = {
+            "last_active": datetime.fromtimestamp(last_active).isoformat(),
+            "history_length": len(session.history),
+        }
+    return jsonify({"code": 0, "active_sessions": len(sessions), "sessions": sessions})
+
+
+@app.route("/debug/test_poll", methods=["POST"])
+def debug_test_poll():
+    """手动触发一次轮询并返回结果（调试用，同步等待）。"""
+    try:
+        poll_feishu_messages()
+        return jsonify({"code": 0, "msg": "轮询完成"})
+    except Exception as e:
+        return jsonify({"code": -1, "error": str(e)})
 
 
 # ══════════════════════════════════════════════════════════════════════
