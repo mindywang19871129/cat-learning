@@ -275,6 +275,23 @@ def _handle_feishu_event(event: dict):
         content = {}
 
     text = content.get("text", "").strip()
+    
+    # ⚠️ 飞书群聊消息默认是 post（富文本）类型，text 字段为空
+    # post 格式: {"title":"...","content":[[{"tag":"text","text":"..."},...]]}
+    if not text and msg_type == "post":
+        post_content = content.get("content", [])
+        if isinstance(post_content, list):
+            text_parts = []
+            for paragraph in post_content:
+                if isinstance(paragraph, list):
+                    for elem in paragraph:
+                        if isinstance(elem, dict) and elem.get("tag") == "text":
+                            text_parts.append(elem.get("text", ""))
+            text = "".join(text_parts).strip()
+        # 也尝试 title
+        if not text:
+            text = content.get("title", "").strip()
+    
     if not text and msg_type != "image":
         return
 
