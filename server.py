@@ -517,10 +517,9 @@ def _handle_feishu_event(event: dict):
         session = _get_or_create_session(sender_id, chat_id)
         
         # ── 先检测试卷编号（如 T0609A、V0609B）→ 直接匹配 ──
-        import re
-        test_id_match = re.search(r'\b([TVWC]\d{4}[A-Z])\b', text) if text else None
-        if test_id_match:
-            test_id = test_id_match.group(1)
+        # ⚠️ 复用早期检测的 test_id_in_text（已用正确正则匹配），不用 \b（Python3中中文是单词字符）
+        if test_id_in_text:
+            test_id = test_id_in_text
             # 查找所有试卷存档
             all_tests = {}
             questions_dir = DATA_DIR / "questions"
