@@ -423,32 +423,39 @@ def _handle_feishu_event(event: dict):
         image_key = content.get("image_key", "")
         if not image_key:
             return
-        local_path = download_feishu_image(message_id, image_key)
-        if not local_path:
-            run(
-                f"[系统上下文：飞书用户 sender_open_id={sender_id}, {target_desc}]\n"
-                f"用户发来一张图片但下载失败，请告知用户。用 send_feishu(receive_id=\"{reply_target}\", ...) 回复。",
-                session,
-            )
-            return
+        # ⚠️ 图片处理异步执行，不阻塞轮询
+        def _process_image_async(sender_id, chat_id, message_id, image_key, reply_target, context_prompt, session):
+            try:
+                local_path = download_feishu_image(message_id, image_key)
+                if not local_path:
+                    run(
+                        f"[系统上下文：飞书用户 sender_open_id={sender_id}, {target_desc}]\n"
+                        f"用户发来一张图片但下载失败，请告知用户。用 send_feishu(receive_id=\"{reply_target}\", ...) 回复。",
+                        session,
+                    )
+                    return
 
-        # 检测是否为批量图片（session历史中已有同一试卷的信息）
-        is_batch = bool("📋 试卷" in context_prompt and session and len(session.history) > 2)
-        batch_hint = "（第2+张图片，与前一张同一套试卷）" if is_batch else ""
+                # 检测是否为批量图片（session历史中已有同一试卷的信息）
+                is_batch = bool("📋 试卷" in context_prompt and session and len(session.history) > 2)
+                batch_hint = "（第2+张图片，与前一张同一套试卷）" if is_batch else ""
+                
+                result = run(
+                    f"{context_prompt}\n"
+                    f"学生发来一张图片（手写答案）{batch_hint}，已保存到 {local_path}。\n\n"
+                    f"步骤1：用 enhanced_ocr_image 识别图片文字（支持长图分割）\n"
+                    f"步骤2：上下文已有试卷题目和标准答案，直接按题号逐题匹配\n"
+                    f"步骤3：如果有多张图片（{batch_hint}），合并所有图片的识别结果一起批改\n"
+                    f"步骤4：逐题批改（✅/❌ + 解析）\n"
+                    f"步骤5：更新mastery/error_book\n"
+                    f"步骤6：send_feishu(receive_id=\"{reply_target}\")发送批改结果\n\n"
+                    f"铁则：按题号匹配，不按顺序猜！enhanced_ocr_image只调用1次！",
+                    session,
+                )
+                _log(f"[INFO] 图片处理完成: {result[:100] if result else 'None'}")
+            except Exception as e:
+                _log(f"[ERROR] 图片处理异常: {e}")
         
-        result = run(
-            f"{context_prompt}\n"
-            f"学生发来一张图片（手写答案）{batch_hint}，已保存到 {local_path}。\n\n"
-            f"步骤1：用 enhanced_ocr_image 识别图片文字（支持长图分割）\n"
-            f"步骤2：上下文已有试卷题目和标准答案，直接按题号逐题匹配\n"
-            f"步骤3：如果有多张图片（{batch_hint}），合并所有图片的识别结果一起批改\n"
-            f"步骤4：逐题批改（✅/❌ + 解析）\n"
-            f"步骤5：更新mastery/error_book\n"
-            f"步骤6：send_feishu(receive_id=\"{reply_target}\")发送批改结果\n\n"
-            f"铁则：按题号匹配，不按顺序猜！enhanced_ocr_image只调用1次！",
-            session,
-        )
-        print(f"[INFO] 图片处理完成: {result[:100] if result else 'None'}")
+        threading.Thread(target=_process_image_async, args=(sender_id, chat_id, message_id, image_key, reply_target, context_prompt, session), daemon=True).start()
         return
         # ── 文件上传处理（教材PDF/文档等）──
         file_key = content.get("file_key", "")

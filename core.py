@@ -272,7 +272,7 @@ def _recognize_via_feishu(p: Path) -> dict | None:
     except Exception:
         return None
 
-    max_retries = 5
+    max_retries = 2  # 减少重试次数，避免阻塞轮询
     for attempt in range(max_retries):
         try:
             resp = requests.post(
