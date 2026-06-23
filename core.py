@@ -868,8 +868,8 @@ def send_feishu(receive_id: str, msg_type: str, content: str) -> str:
 
     Args:
         receive_id: 接收者 ID（ou_xxx, oc_xxx, on_xxx）
-        msg_type: "text"（纯文本）或 "interactive"（卡片消息，content 为卡片 JSON 字符串）
-        content: 消息内容
+        msg_type: "text"（纯文本）、"interactive"（卡片消息）或 "image"（图片）
+        content: 消息内容。image 类型时为本地图片路径
     """
     import requests
     token = _get_feishu_token()
@@ -897,6 +897,33 @@ def send_feishu(receive_id: str, msg_type: str, content: str) -> str:
             "msg_type": "interactive",
             "content": content,
         }
+    elif msg_type == "image":
+        # 飞书图片消息：先上传图片获取 image_key，再发送
+        img_path = _resolve(content)
+        if not img_path.exists():
+            return f"ERROR: 图片文件不存在: {content}"
+        try:
+            # 上传图片
+            with open(str(img_path), "rb") as f:
+                upload_resp = requests.post(
+                    f"{FEISHU_BASE}/im/v1/images",
+                    headers={"Authorization": f"Bearer {token}"},
+                    files={"image": (img_path.name, f, "image/png")},
+                    data={"image_type": "message"},
+                    timeout=30,
+                )
+            upload_data = upload_resp.json()
+            if upload_data.get("code") != 0:
+                return f"ERROR: 图片上传失败 code={upload_data.get('code')} msg={upload_data.get('msg','')}"
+            image_key = upload_data["data"]["image_key"]
+            # 发送图片消息
+            body = {
+                "receive_id": receive_id,
+                "msg_type": "image",
+                "content": json.dumps({"image_key": image_key}),
+            }
+        except Exception as e:
+            return f"ERROR: 图片上传异常: {e}"
     else:
         body = {
             "receive_id": receive_id,
@@ -1003,6 +1030,170 @@ def extract_text_from_pdf(pdf_path: str) -> str:
         return f"ERROR: PDF解析失败: {e}"
 
 
+# ─── 工具 12：几何图形绘制 ──────────────────────────────────────────
+
+def draw_geometry(description: str, output_path: str = "") -> str:
+    """
+    用matplotlib绘制几何图形（三角形、正方形、长方形、圆、轴对称、平移等）。
+    返回生成的图片路径，供 send_feishu 发送。
+    
+    Args:
+        description: 图形描述，JSON格式。支持以下类型：
+            - rect: {"type":"rect","width":8,"height":5,"label":"长8cm宽5cm的长方形","grid":true}
+            - square: {"type":"square","side":6,"label":"边长6cm的正方形","grid":true}
+            - triangle: {"type":"triangle","points":[[0,0],[6,0],[3,5]],"label":"三角形","grid":true}
+            - circle: {"type":"circle","radius":4,"label":"半径4cm的圆","grid":true}
+            - symmetry: {"type":"symmetry","shape":"triangle","points":[[0,0],[4,0],[2,3]],"axis":"vertical","label":"轴对称图形"}
+            - translation: {"type":"translation","shape":"rect","points":[[0,0],[3,2]],"dx":5,"dy":2,"label":"平移"}
+            - grid: {"type":"grid","rows":5,"cols":5,"label":"5×5方格纸"}
+            - custom: {"type":"custom","code":"matplotlib代码片段"}
+        output_path: 输出图片路径（可选，默认自动生成）
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle, Circle, Polygon, FancyArrowPatch
+    import matplotlib.patches as mpatches
+    import numpy as np
+    
+    try:
+        spec = json.loads(description) if isinstance(description, str) else description
+    except json.JSONDecodeError:
+        return f"ERROR: 无法解析图形描述JSON: {description[:100]}"
+    
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.set_aspect('equal')
+    shape_type = spec.get("type", "rect")
+    label = spec.get("label", "")
+    show_grid = spec.get("grid", False)
+    
+    if shape_type == "rect":
+        w, h = spec.get("width", 6), spec.get("height", 4)
+        rect = Rectangle((0, 0), w, h, fill=False, linewidth=2, edgecolor='#2196F3')
+        ax.add_patch(rect)
+        # 标注边长
+        ax.annotate(f'{w}cm', xy=(w/2, -0.5), ha='center', fontsize=11, color='#555')
+        ax.annotate(f'{h}cm', xy=(-0.8, h/2), ha='center', va='center', fontsize=11, color='#555', rotation=90)
+        ax.set_xlim(-1.5, w + 1.5)
+        ax.set_ylim(-1.5, h + 1.5)
+        
+    elif shape_type == "square":
+        s = spec.get("side", 5)
+        square = Rectangle((0, 0), s, s, fill=False, linewidth=2, edgecolor='#2196F3')
+        ax.add_patch(square)
+        ax.annotate(f'{s}cm', xy=(s/2, -0.5), ha='center', fontsize=11, color='#555')
+        ax.set_xlim(-1.5, s + 1.5)
+        ax.set_ylim(-1.5, s + 1.5)
+        
+    elif shape_type == "triangle":
+        pts = spec.get("points", [[0, 0], [6, 0], [3, 5]])
+        tri = Polygon(pts, fill=False, linewidth=2, edgecolor='#2196F3')
+        ax.add_patch(tri)
+        # 标注顶点
+        for i, (x, y) in enumerate(pts):
+            ax.annotate(f'{chr(65+i)}', xy=(x, y), xytext=(x+0.2, y+0.2), fontsize=12, fontweight='bold')
+        all_x = [p[0] for p in pts]
+        all_y = [p[1] for p in pts]
+        ax.set_xlim(min(all_x) - 1.5, max(all_x) + 1.5)
+        ax.set_ylim(min(all_y) - 1.5, max(all_y) + 1.5)
+        
+    elif shape_type == "circle":
+        r = spec.get("radius", 4)
+        circle = Circle((r + 0.5, r + 0.5), r, fill=False, linewidth=2, edgecolor='#2196F3')
+        ax.add_patch(circle)
+        # 标注半径
+        ax.annotate(f'r={r}cm', xy=(r + 0.5, r + 0.5), ha='center', va='center', fontsize=11, color='#555')
+        ax.set_xlim(-0.5, 2 * r + 1.5)
+        ax.set_ylim(-0.5, 2 * r + 1.5)
+        
+    elif shape_type == "symmetry":
+        pts = spec.get("points", [[0, 0], [4, 0], [2, 3]])
+        axis = spec.get("axis", "vertical")
+        # 原图形
+        tri = Polygon(pts, fill=True, alpha=0.3, facecolor='#2196F3', edgecolor='#2196F3', linewidth=2)
+        ax.add_patch(tri)
+        # 对称轴
+        if axis == "vertical":
+            ax_center = max(p[0] for p in pts) + 0.5
+            ax.axvline(x=ax_center, color='red', linestyle='--', linewidth=1.5, label='对称轴')
+            # 对称图形
+            mirror_pts = [[2 * ax_center - p[0], p[1]] for p in pts]
+            mirror_tri = Polygon(mirror_pts, fill=True, alpha=0.3, facecolor='#FF9800', edgecolor='#FF9800', linewidth=2)
+            ax.add_patch(mirror_tri)
+            ax.set_xlim(min(p[0] for p in pts) - 1, max(p[0] for p in mirror_pts) + 1)
+        else:
+            ax_center = max(p[1] for p in pts) + 0.5
+            ax.axhline(y=ax_center, color='red', linestyle='--', linewidth=1.5, label='对称轴')
+            mirror_pts = [[p[0], 2 * ax_center - p[1]] for p in pts]
+            mirror_tri = Polygon(mirror_pts, fill=True, alpha=0.3, facecolor='#FF9800', edgecolor='#FF9800', linewidth=2)
+            ax.add_patch(mirror_tri)
+            ax.set_ylim(min(p[1] for p in pts) - 1, max(p[1] for p in mirror_pts) + 1)
+        ax.legend(fontsize=9)
+        all_y = [p[1] for p in pts] + [p[1] for p in mirror_pts]
+        ax.set_ylim(min(all_y) - 1.5, max(all_y) + 1.5)
+        
+    elif shape_type == "translation":
+        pts = spec.get("points", [[0, 0], [3, 2]])
+        dx, dy = spec.get("dx", 4), spec.get("dy", 2)
+        # 原图形（用矩形表示）
+        x0, y0 = pts[0]
+        w, h = pts[1][0] - x0, pts[1][1] - y0
+        orig = Rectangle((x0, y0), w, h, fill=True, alpha=0.3, facecolor='#2196F3', edgecolor='#2196F3', linewidth=2)
+        ax.add_patch(orig)
+        ax.annotate('原图', xy=(x0 + w/2, y0 - 0.5), ha='center', fontsize=10, color='#2196F3')
+        # 平移后
+        trans = Rectangle((x0 + dx, y0 + dy), w, h, fill=True, alpha=0.3, facecolor='#FF9800', edgecolor='#FF9800', linewidth=2)
+        ax.add_patch(trans)
+        ax.annotate(f'平移({dx},{dy})', xy=(x0 + dx + w/2, y0 + dy - 0.5), ha='center', fontsize=10, color='#FF9800')
+        # 箭头
+        arrow = FancyArrowPatch((x0 + w/2, y0 + h/2), (x0 + dx + w/2, y0 + dy + h/2),
+                                arrowstyle='->', mutation_scale=20, linewidth=2, color='red')
+        ax.add_patch(arrow)
+        ax.set_xlim(min(x0, x0 + dx) - 1.5, max(x0 + w, x0 + dx + w) + 1.5)
+        ax.set_ylim(min(y0, y0 + dy) - 1.5, max(y0 + h, y0 + dy + h) + 1.5)
+        
+    elif shape_type == "grid":
+        rows, cols = spec.get("rows", 5), spec.get("cols", 5)
+        for i in range(rows + 1):
+            ax.axhline(y=i, color='#ccc', linewidth=0.5)
+        for j in range(cols + 1):
+            ax.axvline(x=j, color='#ccc', linewidth=0.5)
+        ax.set_xlim(-0.5, cols + 0.5)
+        ax.set_ylim(-0.5, rows + 0.5)
+        
+    elif shape_type == "custom":
+        code = spec.get("code", "")
+        exec(code, {"ax": ax, "plt": plt, "np": np, "mpatches": mpatches})
+        
+    else:
+        return f"ERROR: 不支持的图形类型: {shape_type}"
+    
+    if label:
+        ax.set_title(label, fontsize=14, fontweight='bold', pad=15)
+    
+    if show_grid:
+        ax.grid(True, alpha=0.3, linestyle='--')
+    
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    
+    # 保存图片
+    if not output_path:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = str(DATA_DIR / "images" / f"geometry_{ts}.png")
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=120, bbox_inches='tight', pad_inches=0.3)
+    plt.close()
+    
+    return json.dumps({
+        "success": True,
+        "image_path": output_path,
+        "description": label or shape_type,
+    }, ensure_ascii=False)
+
+
 # ══════════════════════════════════════════════════════════════════════
 # 工具注册表 + JSON Schema
 # ══════════════════════════════════════════════════════════════════════
@@ -1018,6 +1209,7 @@ TOOLS = {
     "web_search": web_search,
     "ocr_image": enhanced_ocr_image,  # 使用增强版
     "find_questions": find_questions,
+    "draw_geometry": draw_geometry,
     "send_feishu": send_feishu,
 }
 
@@ -1080,12 +1272,20 @@ TOOL_SCHEMAS = [
         }, "required": []},
     }},
     {"type": "function", "function": {
+        "name": "draw_geometry",
+        "description": "【绘制几何图形】用matplotlib绘制三角形、正方形、长方形、圆、轴对称、平移等几何图形，生成PNG图片。description为JSON：{\"type\":\"rect\"|\"square\"|\"triangle\"|\"circle\"|\"symmetry\"|\"translation\"|\"grid\"|\"custom\", ...}。返回图片路径，配合send_feishu发送。",
+        "parameters": {"type": "object", "properties": {
+            "description": {"type": "string", "description": "图形描述JSON，如{\"type\":\"rect\",\"width\":8,\"height\":5,\"label\":\"长8cm宽5cm的长方形\"}"},
+            "output_path": {"type": "string", "description": "输出图片路径（可选，默认自动生成）"},
+        }, "required": ["description"]},
+    }},
+    {"type": "function", "function": {
         "name": "send_feishu",
-        "description": "发送飞书消息。receive_id 支持 ou_（用户open_id）、oc_（群聊chat_id）、on_（union_id），系统自动识别。msg_type='text' 为纯文本，msg_type='interactive' 为卡片消息（content 需为完整的飞书卡片 JSON 对象字符串）。",
+        "description": "发送飞书消息。receive_id 支持 ou_（用户open_id）、oc_（群聊chat_id）、on_（union_id），系统自动识别。msg_type='text' 为纯文本，msg_type='interactive' 为卡片消息（content 需为完整的飞书卡片 JSON 对象字符串），msg_type='image' 发送图片（content 为本地图片路径）。",
         "parameters": {"type": "object", "properties": {
             "receive_id": {"type": "string", "description": "接收者ID：ou_xxx=用户私聊, oc_xxx=群聊, on_xxx=union_id"},
-            "msg_type": {"type": "string", "description": "消息类型：text 或 interactive"},
-            "content": {"type": "string", "description": "消息内容。interactive 类型时需为完整的飞书卡片 JSON 字符串"},
+            "msg_type": {"type": "string", "description": "消息类型：text、interactive 或 image"},
+            "content": {"type": "string", "description": "消息内容。interactive 类型时需为完整的飞书卡片 JSON 字符串，image 类型时为本地图片路径"},
         }, "required": ["receive_id", "msg_type", "content"]},
     }},
 ]

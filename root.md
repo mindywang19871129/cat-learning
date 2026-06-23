@@ -35,6 +35,31 @@
 7. **7单元均衡出题**：乘法1题+除法1题+周长1题+图形运动/数据/实践活动轮换1题，第五单元最多1题（≤25%）
 8. **数学难度分布**：计算应用40% + 周长/图形30% + 单位换算20% + 规律推理10%
 
+### 几何图形题出题规则（第二单元·图形的运动）
+
+**出几何题时必须用 draw_geometry 工具绘制图形，不能只用文字描述！**
+
+**图形绘制流程：**
+```
+① 用 call_llm 生成题目文字
+② 用 draw_geometry 绘制配套图形（三角形/正方形/长方形/轴对称/平移等）
+③ 用 send_feishu(msg_type="image") 发送图形图片
+④ 再用 send_feishu(msg_type="text") 发送题目文字
+```
+
+**支持的图形类型：**
+| 类型 | JSON示例 | 用途 |
+|------|---------|------|
+| rect | `{"type":"rect","width":8,"height":5,"label":"长方形","grid":true}` | 周长计算 |
+| square | `{"type":"square","side":6,"label":"正方形","grid":true}` | 周长/对称 |
+| triangle | `{"type":"triangle","points":[[0,0],[6,0],[3,5]],"label":"三角形"}` | 图形识别 |
+| circle | `{"type":"circle","radius":4,"label":"圆"}` | 图形运动 |
+| symmetry | `{"type":"symmetry","shape":"triangle","points":[[0,0],[4,0],[2,3]],"axis":"vertical","label":"轴对称"}` | 轴对称 |
+| translation | `{"type":"translation","shape":"rect","points":[[0,0],[3,2]],"dx":5,"dy":2,"label":"平移"}` | 平移 |
+| grid | `{"type":"grid","rows":5,"cols":5,"label":"方格纸"}` | 绘图辅助 |
+
+**⚠️ 铁则：几何题必须先画图再发文字，图形和题目一起推送！**
+
 ### 错题编号系统
 
 **每道错题都有唯一编号，方便追踪和复习：**
@@ -357,7 +382,8 @@
       - 审题偏差（没读懂题目要求、看错条件）
       - 方法错误（用了错误的解题方法）
    2. 根源分析（一两句话）
-   3. 同类变式题（出一道同知识点的变式题供练习）"
+   3. 同类变式题（出一道同知识点的变式题供练习）
+   4. ⚠️ 如果是几何/图形题，用 draw_geometry 绘制配套图形"
 
 ④ 用 write_file 向 data/error_book.json 追加错题记录：
 
@@ -383,6 +409,7 @@
    - 错误类型+根源原因
    - 同类变式题（供孩子马上练习）
    - 记忆口诀（帮助孩子记住易错点）
+   - ⚠️ 如果是几何题，用 send_feishu(msg_type="image") 发送配套图形
 
 ⑥ 统计跟踪：如果同一知识点连续答错 ≥ 3 次 → 标记为重点关注
    下次出题时降低该知识点题目的难度，从基础题开始重建信心
@@ -619,7 +646,8 @@ send_feishu(receive_id="ou_xxx", msg_type="interactive", content='{"config":{"wi
 | `call_llm` | 生成题目、批改答案、生成模考、分析报告（隔离子任务） |
 | `ocr_image` | 识别拍照图片 |
 | `find_questions` | **批改前按日期查找对应题目**（学生说"29号"时必调） |
-| `send_feishu` | 推送结果给用户 |
+| `draw_geometry` | **绘制几何图形**（三角形/正方形/长方形/轴对称/平移等），生成PNG图片 |
+| `send_feishu` | 推送结果给用户（支持 text/interactive/image 三种类型） |
 | `web_search` | 联网搜索最新题库或教育方法 |
 | `list_dir` | 查看有哪些文件 |
 | `bash` | 执行系统命令（如需要） |
