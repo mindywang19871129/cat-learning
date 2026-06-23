@@ -446,14 +446,14 @@ def ocr_image(image_path: str) -> str:
 # 视觉API配置（按优先级尝试）
 VISION_APIS = []
 
-# 1. 硅基流动（免费注册送14元，Qwen-VL手写识别强，优先）
+# 1. 硅基流动（免费注册送14元，Qwen3-VL手写识别强，优先）
 SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "")
 if SILICONFLOW_API_KEY:
     VISION_APIS.append({
         "name": "siliconflow",
         "base_url": "https://api.siliconflow.cn/v1",
         "api_key": SILICONFLOW_API_KEY,
-        "model": "Qwen/Qwen2.5-VL-72B-Instruct",
+        "model": "Qwen/Qwen3-VL-32B-Instruct",
     })
 
 # 2. 火山方舟 Doubao-1.5-vision-pro-32k（备选，需额外付费）
