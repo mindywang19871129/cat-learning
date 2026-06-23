@@ -446,20 +446,7 @@ def ocr_image(image_path: str) -> str:
 # 视觉API配置（按优先级尝试）
 VISION_APIS = []
 
-# 1. 火山方舟 Doubao-1.5-vision-pro-32k（手写体识别最强，优先）
-VOLC_API_KEY = os.environ.get("VOLC_API_KEY", "")
-VOLC_ENDPOINT_ID = os.environ.get("VOLC_ENDPOINT_ID", "")
-if VOLC_API_KEY:
-    # 优先用 endpoint_id（推理接入点），没有则用模型名直连
-    model_id = VOLC_ENDPOINT_ID if VOLC_ENDPOINT_ID else "doubao-1.5-vision-pro-32k"
-    VISION_APIS.append({
-        "name": "volcengine_doubao",
-        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-        "api_key": VOLC_API_KEY,
-        "model": model_id,
-    })
-
-# 2. 硅基流动（免费，支持Qwen-VL等视觉模型）
+# 1. 硅基流动（免费注册送14元，Qwen-VL手写识别强，优先）
 SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "")
 if SILICONFLOW_API_KEY:
     VISION_APIS.append({
@@ -467,6 +454,18 @@ if SILICONFLOW_API_KEY:
         "base_url": "https://api.siliconflow.cn/v1",
         "api_key": SILICONFLOW_API_KEY,
         "model": "Qwen/Qwen2.5-VL-72B-Instruct",
+    })
+
+# 2. 火山方舟 Doubao-1.5-vision-pro-32k（备选，需额外付费）
+VOLC_API_KEY = os.environ.get("VOLC_API_KEY", "")
+VOLC_ENDPOINT_ID = os.environ.get("VOLC_ENDPOINT_ID", "")
+if VOLC_API_KEY:
+    model_id = VOLC_ENDPOINT_ID if VOLC_ENDPOINT_ID else "doubao-1.5-vision-pro-32k"
+    VISION_APIS.append({
+        "name": "volcengine_doubao",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "api_key": VOLC_API_KEY,
+        "model": model_id,
     })
 
 # 3. OpenAI兼容API（如通义千问、智谱等）
