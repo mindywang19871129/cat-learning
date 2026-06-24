@@ -608,6 +608,7 @@ def _handle_feishu_event(event: dict):
 - fix_questions: 题目有问题/不全/需要修正
 - weekly_test: 综合测试/周测
 - vocab_train: 词汇训练/背单词/单词测试/生词
+- geometry_practice: 几何图形强化练习（含"几何强化"/"图形强化"/"错题强化 图形"/"根据几何错题"等）
 - parent_adjust: 家长调参（含密码）
 - chat: 普通对话/问候/其他
 
@@ -695,6 +696,24 @@ def _handle_feishu_event(event: dict):
                 f"3. 不完整的重新生成→write_file更新\n"
                 f"4. send_feishu(receive_id=\"{reply_target}\")发送修正结果\n"
                 f"⚠️ 必须调用send_feishu！",
+                session,
+            )
+        elif intent == "geometry_practice":
+            result = run(
+                f"{context_prompt}\n"
+                f"学生请求几何图形强化练习：{text}\n\n"
+                f"请执行几何强化出题流程（详见root.md「几何强化练习」）：\n"
+                f"1. 读 error_book.json → 筛选几何错题（topic_id含math-2图形运动/math-3周长）\n"
+                f"2. 读 mastery.json → 确认几何知识点掌握度\n"
+                f"3. 生成唯一编号：test_id = \"{_gen_test_id('G')}\"\n"
+                f"4. 对每个薄弱几何知识点，用 call_llm 生成「拓展」难度变式题（3-5题）\n"
+                f"5. ⚠️ 每道题必须用 draw_geometry 绘制配套图形\n"
+                f"6. 用 send_feishu(msg_type=\"image\") 先发图形\n"
+                f"7. 用 send_feishu(msg_type=\"text\") 再发题目文字\n"
+                f"8. write_file 存入 today_questions.json（含test_id）\n"
+                f"9. 如果无几何错题→从mastery找score<70的几何知识点\n"
+                f"10. 如果也没有薄弱几何知识点→send_feishu告知'当前几何掌握不错🐱'\n"
+                f"⚠️ 不是简单重复错题，是更高难度的变式题！每道题必须配图！",
                 session,
             )
         elif intent == "weekly_test":
