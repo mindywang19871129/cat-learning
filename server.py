@@ -1501,28 +1501,34 @@ def scheduled_daily_push():
             break
 
     try:
+        # 生成所有 test_id
+        test_ids = {}
+        for task_cfg in sorted(tasks_cfg, key=lambda t: t.get("priority", 99)):
+            prefix = task_cfg.get("prefix", "X")
+            test_ids[task_cfg["type"]] = _gen_test_id(prefix)
+
+        # 一次 LLM 调用生成所有任务
+        combined_prompt = (HOME / "prompts" / "daily_all.md").read_text(encoding="utf-8")
+        prompt = combined_prompt.format(
+            today_str=today_str,
+            test_id_c=test_ids.get("calc", ""),
+            test_id_v=test_ids.get("vocab", ""),
+            test_id_g=test_ids.get("grammar", ""),
+            test_id_p=test_ids.get("writing", ""),
+            test_id_m=test_ids.get("math", ""),
+            test_id_geo=test_ids.get("geometry", ""),
+        )
+        _log(f"[SCHEDULER] 开始一次性生成全部 {len(tasks_cfg)} 个任务...")
+        session = init_new_session()
+        run(prompt, session)
+        _log(f"[SCHEDULER] LLM 出题完成")
+
+        # 全部加入队列
         for task_cfg in sorted(tasks_cfg, key=lambda t: t.get("priority", 99)):
             ttype = task_cfg["type"]
-            prefix = task_cfg.get("prefix", "X")
-            prompt_file = task_cfg.get("prompt_file", "")
-            output_file_tpl = task_cfg.get("output_file", "")
-            test_id = _gen_test_id(prefix)
-            output_file = output_file_tpl.replace("{today_str}", today_str)
-
-            _log(f"[SCHEDULER] 开始 {ttype} 出题 (test_id={test_id})...")
-
-            prompt_path = HOME / prompt_file
-            if not prompt_path.exists():
-                _log(f"[SCHEDULER] ⚠️ prompt 文件不存在: {prompt_file}，跳过 {ttype}")
-                continue
-            prompt_template = prompt_path.read_text(encoding="utf-8")
-            prompt = prompt_template.format(test_id=test_id, today_str=today_str)
-
-            session = init_new_session()
-            run(prompt, session)
-
+            test_id = test_ids.get(ttype, "")
+            output_file = task_cfg.get("output_file", "").replace("{today_str}", today_str)
             _add_task_to_queue(test_id, today_str, ttype, str(DATA_DIR / output_file.replace("data/", "")))
-            _log(f"[SCHEDULER] {ttype} 出题完成，已加入队列")
 
         # 恢复 send_feishu 工具
         if _saved_send_feishu:
