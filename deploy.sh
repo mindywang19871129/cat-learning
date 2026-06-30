@@ -109,7 +109,7 @@ if [ "$NO_SYSTEMD" = false ]; then
     if [ -f "$SERVICE_FILE" ]; then
         WORKDIR=$(pwd)
         sed -i "s|WorkingDirectory=.*|WorkingDirectory=$WORKDIR|" "$SERVICE_FILE"
-        sed -i "s|ExecStart=.*|ExecStart=$VENV_DIR/bin/gunicorn server:app --preload --capture-output --log-level info --bind 0.0.0.0:8192 --workers 2 --timeout 120 --access-logfile /var/log/cat-learning.log --error-logfile /var/log/cat-learning.log|" "$SERVICE_FILE"
+        sed -i "s|ExecStart=.*|ExecStart=$VENV_DIR/bin/gunicorn server:app --preload --capture-output --log-level info --bind 0.0.0.0:8192 --workers 1 --timeout 300 --access-logfile /var/log/cat-learning.log --error-logfile /var/log/cat-learning.log|" "$SERVICE_FILE"
     fi
     
     cp "$SERVICE_FILE" /etc/systemd/system/

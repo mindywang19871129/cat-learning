@@ -1464,10 +1464,16 @@ def _log(msg: str):
     sys.stderr.flush()
 
 
+_SCHEDULED_PUSH_LOCK = threading.Lock()
+
 def scheduled_daily_push():
     """定时每日推送：从 config.toml [[tasks]] 读取任务配置，逐个生成，全部入队列，只推送第一个。"""
-    _log(f"[SCHEDULER] ====== 开始执行每日推送 ======")
-    _log(f"[SCHEDULER] 时间: {datetime.now()}")
+    if not _SCHEDULED_PUSH_LOCK.acquire(blocking=False):
+        _log("[SCHEDULER] ⛔ 已有推送任务正在执行，跳过重复调用")
+        return
+    try:
+        _log(f"[SCHEDULER] ====== 开始执行每日推送 ======")
+        _log(f"[SCHEDULER] 时间: {datetime.now()}")
 
     can_push, reason = _can_scheduled_push_today()
     _log(f"[SCHEDULER] 推送前置检查: can_push={can_push}, reason={reason}")
@@ -1533,6 +1539,8 @@ def scheduled_daily_push():
             _core_mod.TOOL_SCHEMAS.append(_saved_schema)
         _log(f"[SCHEDULER] ====== 每日推送失败: {e} ======")
         _log(traceback.format_exc())
+    finally:
+        _SCHEDULED_PUSH_LOCK.release()
 
 
 def scheduled_weekly_test():
