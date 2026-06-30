@@ -862,6 +862,10 @@ def _get_feishu_token() -> str:
     return ""
 
 
+# ── 全局开关：定时出题期间阻止 LLM 调用 send_feishu ──
+_BLOCK_SEND_FEISHU = False
+
+
 def send_feishu(receive_id: str, msg_type: str, content: str) -> str:
     """
     发送飞书消息，自动识别 open_id / chat_id / user_id。
@@ -871,6 +875,10 @@ def send_feishu(receive_id: str, msg_type: str, content: str) -> str:
         msg_type: "text"（纯文本）、"interactive"（卡片消息）或 "image"（图片）
         content: 消息内容。image 类型时为本地图片路径
     """
+    global _BLOCK_SEND_FEISHU
+    if _BLOCK_SEND_FEISHU:
+        return "BLOCKED: send_feishu is disabled during scheduled task. Do NOT call this function, system will push from queue instead."
+    
     import requests
     token = _get_feishu_token()
     if not token:
@@ -1051,7 +1059,13 @@ def draw_geometry(description: str, output_path: str = "") -> str:
     """
     import matplotlib
     matplotlib.use('Agg')
+    # 配置中文字体（优先使用系统自带中文字体）
     import matplotlib.pyplot as plt
+    try:
+        matplotlib.rcParams['font.sans-serif'] = ['WenQuanYi Micro Hei', 'Noto Sans CJK SC', 'SimHei', 'DejaVu Sans']
+        matplotlib.rcParams['axes.unicode_minus'] = False
+    except:
+        pass
     from matplotlib.patches import Rectangle, Circle, Polygon, FancyArrowPatch
     import matplotlib.patches as mpatches
     import numpy as np
@@ -1194,6 +1208,34 @@ def draw_geometry(description: str, output_path: str = "") -> str:
     }, ensure_ascii=False)
 
 
+# ─── 工具：追加错题（Python层处理，避免LLM覆盖写入）───────────────────
+
+def append_error_book(errors_json: str) -> str:
+    """向 error_book.json 追加一条或多条错题记录（Python层处理追加，不会覆盖已有数据）。
+    errors_json 是 JSON 数组字符串，如 [{"error_id":"E0629001","test_id":"T0629A","date":"2026-06-29","question":"...","student_answer":"...","correct_answer":"...","error_type":"...","reviewed_date":null}]
+    """
+    error_file = DATA_DIR / "error_book.json"
+    try:
+        new_errors = json.loads(errors_json)
+        if not isinstance(new_errors, list):
+            new_errors = [new_errors]
+    except Exception as e:
+        return f"ERROR: 无法解析错题JSON: {e}"
+    
+    existing = []
+    if error_file.exists():
+        try:
+            existing = json.loads(error_file.read_text(encoding="utf-8"))
+            if not isinstance(existing, list):
+                existing = []
+        except Exception:
+            existing = []
+    
+    existing.extend(new_errors)
+    error_file.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+    return f"OK: 已追加 {len(new_errors)} 条错题，当前共 {len(existing)} 条"
+
+
 # ══════════════════════════════════════════════════════════════════════
 # 工具注册表 + JSON Schema
 # ══════════════════════════════════════════════════════════════════════
@@ -1211,6 +1253,7 @@ TOOLS = {
     "find_questions": find_questions,
     "draw_geometry": draw_geometry,
     "send_feishu": send_feishu,
+    "append_error_book": append_error_book,
 }
 
 TOOL_SCHEMAS = [
@@ -1287,6 +1330,13 @@ TOOL_SCHEMAS = [
             "msg_type": {"type": "string", "description": "消息类型：text、interactive 或 image"},
             "content": {"type": "string", "description": "消息内容。interactive 类型时需为完整的飞书卡片 JSON 字符串，image 类型时为本地图片路径"},
         }, "required": ["receive_id", "msg_type", "content"]},
+    }},
+    {"type": "function", "function": {
+        "name": "append_error_book",
+        "description": "【追加错题】向 error_book.json 追加一条或多条错题记录。Python层处理追加，不会覆盖已有数据。批改发现错题时，必须用此工具存入错题本，不要用 write_file 直接写！",
+        "parameters": {"type": "object", "properties": {
+            "errors_json": {"type": "string", "description": "JSON数组字符串，如 [{\"error_id\":\"E0629001\",\"test_id\":\"T0629A\",\"date\":\"2026-06-29\",\"question\":\"...\",\"student_answer\":\"...\",\"correct_answer\":\"...\",\"error_type\":\"...\",\"reviewed_date\":null}]"},
+        }, "required": ["errors_json"]},
     }},
 ]
 

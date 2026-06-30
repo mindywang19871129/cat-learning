@@ -447,7 +447,7 @@ flowchart TD
     G --> H["Agent: 用 edit_file 更新 mastery.json"]
     H --> I{"答对了?"}
     I -->|是| J["mastery +5 分"]
-    I -->|否| K["用 write_file 追加到 error_book.json"]
+    I -->|否| K["用 append_error_book 追加到 error_book.json"]
     K --> L["mastery -10 分"]
     J --> M["Agent: 用 send_feishu 发批改结果卡片"]
     L --> M

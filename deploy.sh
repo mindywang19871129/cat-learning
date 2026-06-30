@@ -1,8 +1,8 @@
 #!/bin/bash
 # ============================================
-#  小肥猫学习助手 v2.2 — 一键部署脚本（纯云端）
+#  小肥猫学习助手 v3.0 — 一键部署脚本（学习队列模式）
 # 无需本地OCR依赖，所有识别由飞书云端API完成
-# v2.2: OCR频率限制自动退避重试 + OCR.space降级方案
+# v3.0: 学习队列模式 + 图片自动清理 + 三年级归档
 set -e
 
 RED='\033[31m'
@@ -67,7 +67,8 @@ ok "Python 依赖安装完成"
 
 # ---- 数据目录 ----
 info "创建数据目录..."
-mkdir -p data/sessions data/workspace data/notes data/images
+mkdir -p data/sessions data/workspace data/notes data/images data/archive scripts
+chmod +x scripts/*.py 2>/dev/null || true
 ok "数据目录就绪"
 
 # ---- .env 检查 ----
@@ -144,6 +145,21 @@ else
     warn "跳过 systemd 安装，直接启动 gunicorn..."
     info "启动命令:"
     echo "  $VENV_DIR/bin/gunicorn server:app --bind 0.0.0.0:8192 --workers 2 --timeout 120 --access-logfile - --error-logfile -"
+    echo ""
+fi
+
+# ── 检查旧数据 ──
+OLD_FILES=$(find data/questions/ -name "*.json" 2>/dev/null | wc -l)
+if [ -f "data/today_questions.json" ] || [ "$OLD_FILES" -gt 0 ]; then
+    echo ""
+    warn "检测到旧题目数据（可能来自之前版本）"
+    warn "   today_questions.json: $([ -f data/today_questions.json ] && echo '存在' || echo '无')"
+    warn "   data/questions/ 旧文件: ${OLD_FILES} 个"
+    echo ""
+    warn "如果这些是过期数据，建议清理后重新出题："
+    echo "  rm -f data/today_questions.json data/learning_queue.json data/questions/*.json"
+    echo "  echo '[]' > data/error_book.json"
+    echo "  然后在飞书说「出今日任务」"
     echo ""
 fi
 

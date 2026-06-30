@@ -71,6 +71,77 @@ interval_seconds = 10
 # ocr.space 为备用（免费25000次/月），需在 https://ocr.space/ocrapi 注册获取API Key
 # API Key 配置在 .env 文件的 OCR_SPACE_API_KEY 字段
 
+# ── 每日学习任务配置 ──
+# 按 priority 从小到大依次推送，孩子完成一个才能做下一个
+# type: 任务类型标识
+# priority: 推送优先级（数字越小越先推送）
+# title: 飞书推送时显示的任务标题
+# question_count: 题目数量
+# prompt_file: LLM 出题提示词文件（相对于项目根目录）
+# prefix: 试卷编号前缀（C=计算, V=词汇, G=语法, P=作文, T=数学, E=几何）
+# difficulty: 默认难度（basic/normal/hard）
+# output_file: 题目存储文件名模板（{today_str} 会被替换为当天日期）
+
+[[tasks]]
+type = "calc"
+priority = 1
+title = "🔢 计算热身"
+question_count = 10
+prompt_file = "prompts/calc.md"
+prefix = "C"
+difficulty = "normal"
+output_file = "data/questions/questions_{today_str}_calc.json"
+
+[[tasks]]
+type = "vocab"
+priority = 2
+title = "📚 KET词汇"
+question_count = 10
+prompt_file = "prompts/vocab.md"
+prefix = "V"
+difficulty = "normal"
+output_file = "data/questions/questions_{today_str}_vocab.json"
+
+[[tasks]]
+type = "grammar"
+priority = 3
+title = "📖 英语语法"
+question_count = 4
+prompt_file = "prompts/grammar.md"
+prefix = "G"
+difficulty = "normal"
+output_file = "data/questions/questions_{today_str}_grammar.json"
+
+[[tasks]]
+type = "writing"
+priority = 4
+title = "✏️ 英语作文"
+question_count = 1
+prompt_file = "prompts/writing.md"
+prefix = "P"
+difficulty = "normal"
+output_file = "data/questions/questions_{today_str}_writing.json"
+
+[[tasks]]
+type = "math"
+priority = 5
+title = "📐 数学综合"
+question_count = 4
+prompt_file = "prompts/math.md"
+prefix = "T"
+difficulty = "hard"
+output_file = "data/questions/questions_{today_str}.json"
+
+[[tasks]]
+type = "geometry"
+priority = 6
+title = "📏 几何强化"
+question_count = 3
+prompt_file = "prompts/geometry.md"
+prefix = "E"
+difficulty = "hard"
+output_file = "data/questions/questions_{today_str}_geometry.json"
+
 [exam]
 # 模考配置
 math_timeout_minutes = 60

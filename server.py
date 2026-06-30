@@ -24,9 +24,10 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from core import (
     init_new_session, run, download_feishu_image,
     download_feishu_file, extract_text_from_pdf,
-    ocr_image, send_feishu, find_questions,
+    ocr_image, enhanced_ocr_image, send_feishu, find_questions,
     verify_password, DATA_DIR, CFG, HOME as CORE_HOME, Session
 )
+import core as _core_mod
 
 app = Flask(__name__)
 
@@ -107,7 +108,632 @@ def _save_session_to_file(session_key: str, session: Session):
 # ══════════════════════════════════════════════════════════════════════
 
 # ── 发题/新题 触发关键词（仅用于Python层快速拦截，不用于意图识别）──
-_FATI_KEYWORDS = ["发题", "新题", "做题", "来一套", "再来一套", "发一套", "再发", "做新题", "出题", "推送题目", "今日题目", "每日一练"]
+_FATI_KEYWORDS = ["发题", "新题", "做题", "来一套", "再来一套", "发一套", "再发", "做新题", "出题", "推送题目", "今日题目", "每日一练", "出今日任务", "生成今日任务"]
+
+# ── 学习队列模式 ──
+_LEARNING_QUEUE_FILE = DATA_DIR / "learning_queue.json"
+_IMAGE_CACHE = {}  # {task_id: [{"path":..., "time":...}]}
+_IMAGE_CACHE_TIMEOUT = 120  # 2分钟超时
+_IMAGE_CACHE_META = {}  # {task_id: {"first_image_at": float, "last_image_at": float, "auto_submitted": bool}}
+
+# ── 自适应难度追踪 ──
+_RECENT_RESULTS = {}  # {topic: {"wrong_count": int, "basic_wrong": bool, "last_task_id": str}}
+
+# 自动提交超时配置（秒）
+_AUTO_SUBMIT_TIMEOUT_LEARNING = 300   # 孩子答案图片：5分钟
+_AUTO_SUBMIT_TIMEOUT_ERROR = 600      # 家长错题图片：10分钟
+_AUTO_SUBMIT_SCAN_INTERVAL = 60       # 扫描间隔：60秒
+
+# 任务类型优先级（数字越小越优先）
+# 从 config.toml [[tasks]] 构建优先级和标题映射
+_TASK_PRIORITY = {}
+_TASK_TITLES = {}
+for _t in CFG.get("tasks", []):
+    _TASK_PRIORITY[_t["type"]] = _t.get("priority", 99)
+    _TASK_TITLES[_t["type"]] = _t.get("title", _t["type"])
+# 补充非每日任务类型
+_TASK_PRIORITY.setdefault("english", 7)
+_TASK_PRIORITY.setdefault("error_review", 8)
+_TASK_TITLES.setdefault("english", "📝 英语练习")
+_TASK_TITLES.setdefault("error_review", "🔄 错题订正")
+
+def _load_learning_queue() -> dict:
+    """加载学习队列，自动清理超过7天的过期任务。"""
+    if _LEARNING_QUEUE_FILE.exists():
+        try:
+            q = json.loads(_LEARNING_QUEUE_FILE.read_text(encoding="utf-8"))
+            # 自动清理过期任务（超过7天未完成）
+            cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+            old_len = len(q.get("queue", []))
+            q["queue"] = [t for t in q.get("queue", []) if t.get("date", "") >= cutoff or t.get("status") == "graded"]
+            if len(q.get("queue", [])) < old_len:
+                _save_learning_queue(q)
+            return q
+        except Exception:
+            pass
+    return {"active_task_id": None, "mode": "idle", "queue": [], "error_upload_mode": {"active": False, "image_paths": []}}
+
+def _save_learning_queue(q: dict):
+    """保存学习队列。"""
+    _LEARNING_QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _LEARNING_QUEUE_FILE.write_text(json.dumps(q, ensure_ascii=False, indent=2), encoding="utf-8")
+
+def _migrate_old_tasks_to_queue():
+    """扫描历史题目，把未完成任务迁移进学习队列。"""
+    q = _load_learning_queue()
+    existing_ids = {t["task_id"] for t in q.get("queue", [])}
+    
+    # 扫描 questions/ 目录
+    questions_dir = DATA_DIR / "questions"
+    if questions_dir.exists():
+        for f in sorted(questions_dir.glob("*.json")):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                tid = data.get("test_id", "")
+                if not tid or tid in existing_ids:
+                    continue
+                # 判断任务类型（从 config.toml [[tasks]] 构建映射）
+                prefix = tid[0] if tid else ""
+                ttype_map = {t.get("prefix", ""): t["type"] for t in CFG.get("tasks", []) if t.get("prefix")}
+                ttype = ttype_map.get(prefix, "math")
+                # 检查是否已完成（所有题都有score或batch_id）
+                qs = data.get("questions", data.get("math", []) + data.get("english", []) + data.get("vocab", []))
+                all_done = all("score" in q or "batch_id" in q for q in qs) if qs else False
+                if all_done:
+                    continue
+                # 超过7天的旧任务自动过期，不加入队列
+                task_date = data.get("date", "")
+                if task_date:
+                    try:
+                        days_old = (datetime.now() - datetime.strptime(task_date, "%Y-%m-%d")).days
+                        if days_old > 7:
+                            _log(f"[MIGRATE] 跳过过期任务 {tid}（{task_date}，{days_old}天前）")
+                            continue
+                    except:
+                        pass
+                existing_ids.add(tid)
+                q.setdefault("queue", []).append({
+                    "task_id": tid,
+                    "date": data.get("date", ""),
+                    "type": ttype,
+                    "title": _TASK_TITLES.get(ttype, "综合练习"),
+                    "status": "pending",
+                    "priority": _TASK_PRIORITY.get(ttype, 99),
+                    "questions_file": str(f),
+                    "image_paths": [],
+                    "submitted_at": None,
+                    "graded_at": None,
+                })
+            except Exception:
+                pass
+    
+    # 也检查 today_questions.json
+    today_file = DATA_DIR / "today_questions.json"
+    if today_file.exists():
+        try:
+            data = json.loads(today_file.read_text(encoding="utf-8"))
+            tid = data.get("test_id", "")
+            if tid and tid not in existing_ids:
+                prefix = tid[0] if tid else ""
+                ttype_map = {t.get("prefix", ""): t["type"] for t in CFG.get("tasks", []) if t.get("prefix")}
+                ttype = ttype_map.get(prefix, "math")
+                qs = data.get("questions", data.get("math", []) + data.get("english", []) + data.get("vocab", []))
+                all_done = all("score" in q or "batch_id" in q for q in qs) if qs else False
+                # 超过7天的旧任务自动过期
+                task_date = data.get("date", "")
+                expired = False
+                if task_date:
+                    try:
+                        days_old = (datetime.now() - datetime.strptime(task_date, "%Y-%m-%d")).days
+                        if days_old > 7:
+                            expired = True
+                    except:
+                        pass
+                if not all_done and not expired:
+                    existing_ids.add(tid)
+                    q.setdefault("queue", []).append({
+                        "task_id": tid,
+                        "date": data.get("date", ""),
+                        "type": ttype,
+                        "title": _TASK_TITLES.get(ttype, "综合练习"),
+                        "status": "pending",
+                        "priority": _TASK_PRIORITY.get(ttype, 99),
+                        "questions_file": str(today_file),
+                        "image_paths": [],
+                        "submitted_at": None,
+                        "graded_at": None,
+                    })
+        except Exception:
+            pass
+    
+    # 按优先级+日期排序
+    q["queue"] = sorted(q.get("queue", []), key=lambda t: (t.get("priority", 99), t.get("date", "")))
+    _save_learning_queue(q)
+    return q
+
+def _get_next_pending_task(q: dict) -> dict | None:
+    """获取队列中下一个待处理任务。"""
+    for t in q.get("queue", []):
+        if t.get("status") in ("pending", "in_progress", "image_received"):
+            return t
+    return None
+
+def _add_task_to_queue(task_id: str, date_str: str, task_type: str, questions_file: str, difficulty: str = "normal"):
+    """将任务加入学习队列（去重）。"""
+    q = _load_learning_queue()
+    existing_ids = {t["task_id"] for t in q.get("queue", [])}
+    if task_id in existing_ids:
+        return q
+    q.setdefault("queue", []).append({
+        "task_id": task_id,
+        "date": date_str,
+        "type": task_type,
+        "title": _TASK_TITLES.get(task_type, "综合练习"),
+        "status": "pending",
+        "priority": _TASK_PRIORITY.get(task_type, 99),
+        "questions_file": questions_file,
+        "difficulty": difficulty,
+        "image_paths": [],
+        "submitted_at": None,
+        "graded_at": None,
+    })
+    q["queue"] = sorted(q["queue"], key=lambda t: (t.get("priority", 99), t.get("date", "")))
+    _save_learning_queue(q)
+    return q
+
+def _push_first_pending_to_all():
+    """推送队列中第一个待处理任务到所有配置聊天（仅当无活跃任务时）。"""
+    q = _load_learning_queue()
+    _log(f"[PUSH] 队列状态: active={q.get('active_task_id')}, mode={q.get('mode')}, queue_size={len(q.get('queue', []))}")
+    if q.get("active_task_id") and q.get("mode") == "answering":
+        _log(f"[PUSH] 已有活跃任务，跳过推送")
+        return
+    task = _get_next_pending_task(q)
+    if not task:
+        _log(f"[PUSH] 队列中无待处理任务")
+        return
+    _log(f"[PUSH] 推送任务: {task['task_id']} type={task.get('type')} file={task.get('questions_file')}")
+    task["status"] = "in_progress"
+    q["active_task_id"] = task["task_id"]
+    q["mode"] = "answering"
+    _save_learning_queue(q)
+    poll_cfg = CFG.get("feishu", {}).get("poll", {})
+    for chat_id in poll_cfg.get("chat_ids", []):
+        _push_task_to_feishu(task, chat_id)
+
+def _push_task_to_feishu(task: dict, reply_target: str):
+    """推送单个任务到飞书。"""
+    try:
+        qf = Path(task["questions_file"])
+        if not qf.exists():
+            _log(f"[PUSH] ⚠️ 题目文件不存在: {task['questions_file']}")
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content=f"🐱 找不到任务 {task['task_id']} 的题目文件，请联系管理员～")
+            return
+        data = json.loads(qf.read_text(encoding="utf-8"))
+        task_type = task.get("type", "")
+        
+        # 不同任务类型的问题提取
+        if task_type == "writing":
+            qs = [{"id": "W1", "question": data.get("prompt", "")}]
+            scoring = data.get("scoring_points", [])
+        else:
+            qs = data.get("questions", data.get("math", []) + data.get("english", []) + data.get("vocab", []))
+            scoring = []
+        
+        emoji_map = {"calc": "🔢", "math": "📐", "geometry": "📏", "vocab": "📚", "grammar": "📖", "writing": "✏️", "english": "📝", "error_review": "🔄", "review": "💡"}
+        emoji = emoji_map.get(task_type, "📋")
+        
+        diff_map = {"basic": "（基础）", "normal": "", "hard": "（提升）", "advanced": "（拓展）"}
+        diff_hint = diff_map.get(task.get("difficulty", ""), "")
+        
+        lines = [f"{emoji} {task['title']}{diff_hint} 任务", f"试卷编号：{task['task_id']}"]
+        if task_type != "writing":
+            lines.append(f"题目数量：{len(qs)}题")
+        lines.append("")
+        for i, q in enumerate(qs, 1):
+            qid = q.get("id", f"Q{i}")
+            qtext = q.get("question", "")[:200]
+            lines.append(f"第{i}题 [{qid}]：{qtext}")
+        
+        if scoring:
+            lines.append("")
+            lines.append("评分要点：")
+            for sp in scoring:
+                lines.append(f"  • {sp}")
+        
+        lines.append("")
+        lines.append("请在纸上写下答案，拍照后直接发给我。")
+        lines.append("发完所有图片后回复「提交」开始批改。")
+        lines.append("🐱 加油！")
+        
+        send_feishu(receive_id=reply_target, msg_type="text", content="\n".join(lines))
+        _log(f"[QUEUE] 推送任务 {task['task_id']} 到 {reply_target[:16]}...")
+    except Exception as e:
+        _log(f"[QUEUE] 推送任务失败: {e}")
+        send_feishu(receive_id=reply_target, msg_type="text",
+                   content=f"🐱 推送任务 {task['task_id']} 时出错了：{e}")
+
+def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto: bool = False) -> bool:
+    """提交当前活跃任务进行批改。is_auto=True 表示自动提交。"""
+    q = _load_learning_queue()
+    active_id = q.get("active_task_id")
+    if not active_id or q.get("mode") != "answering":
+        if not is_auto:
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content="🐱 当前没有正在进行的任务哦～请先回复「开始学习」")
+        return True
+
+    # 检查是否已自动提交过
+    meta = _IMAGE_CACHE_META.get(active_id, {})
+    if is_auto and meta.get("auto_submitted"):
+        return True
+
+    # 找到活跃任务
+    task = None
+    for t in q.get("queue", []):
+        if t["task_id"] == active_id:
+            task = t
+            break
+
+    if not task:
+        if not is_auto:
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content="🐱 找不到当前任务，请重新「开始学习」")
+        q["active_task_id"] = None
+        q["mode"] = "idle"
+        _save_learning_queue(q)
+        return True
+
+    # 合并图片缓存
+    cached = _IMAGE_CACHE.get(active_id, [])
+    task["image_paths"].extend([c["path"] for c in cached])
+    _IMAGE_CACHE.pop(active_id, None)
+    _IMAGE_CACHE_META.pop(active_id, None)
+
+    if not task["image_paths"]:
+        if not is_auto:
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content="🐱 还没有收到答案图片哦～请拍照后发给我，再回复「提交」")
+        return True
+
+    task["status"] = "submitted"
+    task["submitted_at"] = datetime.now().isoformat()
+    _save_learning_queue(q)
+
+    # 异步批改
+    def _grade_task():
+        try:
+            session = _get_or_create_session(sender_id, chat_id)
+            img_paths = task["image_paths"]
+            qf = Path(task["questions_file"])
+            if not qf.exists():
+                send_feishu(receive_id=reply_target, msg_type="text", content="🐱 题目文件丢失了...")
+                return
+            data = json.loads(qf.read_text(encoding="utf-8"))
+            qs = data.get("questions", data.get("math", []) + data.get("english", []) + data.get("vocab", []))
+            qs_summary = "\n".join([f"  {q['id']}: {q['question'][:100]}... | 答案:{q.get('answer','')}" for q in qs])
+
+            # OCR所有图片
+            all_ocr = []
+            for img_path in img_paths:
+                ocr_result = json.loads(enhanced_ocr_image(img_path))
+                if ocr_result.get("success"):
+                    all_ocr.append(ocr_result.get("text", ""))
+                try:
+                    Path(img_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+            ocr_text = "\n---\n".join(all_ocr)
+
+            auto_hint = "\n⚠️ 这是系统自动提交的（学生超时未手动提交），请在批改结果开头说明。\n" if is_auto else ""
+            task_type_hint = task.get("type", "")
+            task_topic = ""
+            if task_type_hint == "math": task_topic = "数学"
+            elif task_type_hint == "vocab": task_topic = "KET词汇"
+            elif task_type_hint == "grammar": task_topic = "英语语法"
+            elif task_type_hint == "writing": task_topic = "英语写作"
+            elif task_type_hint in ("geometry", "calc"): task_topic = "几何" if task_type_hint == "geometry" else "计算"
+            
+            result = run(
+                f"[系统上下文：飞书用户 sender_open_id={sender_id}, 回复目标ID={reply_target}]\n"
+                f"学生提交了任务 {task['task_id']} 的手写答案图片，OCR识别结果如下：\n\n"
+                f"{ocr_text}\n\n"
+                f"试卷题目和标准答案：\n{qs_summary}\n\n"
+                f"{auto_hint}"
+                f"请逐题批改（✅/❌ + 解析），更新mastery/error_book。\n\n"
+                f"⚠️ 自适应难度规则（root.md第9节）：\n"
+                f"- 如果基础题错了（score<50的知识点）→ 批改结果最后必须加上一行：\n"
+                f"  [NEEDS_REVIEW:{task_topic}]\n"
+                f"- 如果有1道以上错题 → 加一行：[ERROR_COUNT:{错误的题数}]\n\n"
+                f"然后用 send_feishu(receive_id=\"{reply_target}\") 发送批改结果。\n"
+                f"批改完成后，在消息末尾加上：\n"
+                f"「回复「继续」做下一项任务，回复「任务清单」查看进度🐱」",
+                session,
+            )
+
+            # ── 更新任务状态 ──
+            q2 = _load_learning_queue()
+            need_review = False
+            review_topic = ""
+            for t in q2.get("queue", []):
+                if t["task_id"] == task["task_id"]:
+                    t["status"] = "graded"
+                    t["graded_at"] = datetime.now().isoformat()
+                    t["image_paths"] = []
+                    break
+            
+            # ── 自适应难度：检测是否需要基础复习 ──
+            if result and "[NEEDS_REVIEW:" in result:
+                import re
+                m = re.search(r'\[NEEDS_REVIEW:([^\]]+)\]', str(result))
+                if m:
+                    review_topic = m.group(1).strip()
+                    need_review = True
+                    _log(f"[ADAPTIVE] 检测到基础概念薄弱，需要复习: {review_topic}")
+
+            _save_learning_queue(q2)
+            _log(f"[QUEUE] 批改完成: {task['task_id']}")
+
+            # ── 自动生成基础复习任务 ──
+            if need_review and review_topic:
+                _log(f"[ADAPTIVE] 生成基础复习任务: {review_topic}")
+                review_session = init_new_session()
+                review_test_id = _gen_test_id('R')
+                review_file = str(DATA_DIR / "questions" / f"review_{review_test_id}.json")
+                review_result = run(
+                    f"请为学生生成一个基础概念复习任务。\n\n"
+                    f"═══════════════════════════════════════\n"
+                    f"第零步：生成编号\n"
+                    f"═══════════════════════════════════════\n"
+                    f"test_id = \"{review_test_id}\"\n"
+                    f"每道题用 _gen_question_id() 生成全局唯一编号\n\n"
+                    f"═══════════════════════════════════════\n"
+                    f"复习主题：{review_topic}\n"
+                    f"═══════════════════════════════════════\n\n"
+                    f"⚠️ 学生在基础题上犯了错误。请执行：\n"
+                    f"1. 先阅读 data/mastery.json，找到 score<50 的知识点\n"
+                    f"2. 用最简单易懂的方式讲解该基础概念（用生活例子，像老师在讲新课一样）\n"
+                    f"3. 出 3 道基础级别的练习题（比原来的题目更简单）\n"
+                    f"4. 每道题给出详细解题步骤\n\n"
+                    f"═══════════════════════════════════════\n"
+                    f"存储\n"
+                    f"═══════════════════════════════════════\n"
+                    f"用 write_file 存入 {review_file}\n"
+                    f"格式：{{\"test_id\":\"{review_test_id}\",\"date\":\"{datetime.now().strftime('%Y-%m-%d')}\",\"type\":\"review\",\"topic\":\"{review_topic}\","
+                    f"\"introduction\":\"概念讲解内容\",\"questions\":[{{id,question,answer,hint}}]}}\n\n"
+                    "⚠️ 注意：只存储，不要调用 send_feishu 推送！系统会自动从学习队列推送。",
+                    review_session,
+                )
+                # 插入复习任务到队列下一个位置
+                q3 = _load_learning_queue()
+                pending_idx = None
+                for i, t in enumerate(q3.get("queue", [])):
+                    if t.get("status") in ("pending", "in_progress", "image_received"):
+                        pending_idx = i
+                        break
+                review_task = {
+                    "task_id": review_test_id,
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                    "type": "review",
+                    "title": f"🔄 {review_topic}·基础复习",
+                    "status": "pending",
+                    "priority": 0,  # 最高优先级，插到最前面
+                    "questions_file": review_file,
+                    "difficulty": "basic",
+                    "image_paths": [],
+                    "submitted_at": None,
+                    "graded_at": None,
+                }
+                if pending_idx is not None:
+                    q3["queue"].insert(pending_idx, review_task)
+                else:
+                    q3.setdefault("queue", []).append(review_task)
+                _save_learning_queue(q3)
+                _log(f"[ADAPTIVE] 基础复习任务 {review_test_id} 已插入队列")
+                send_feishu(receive_id=reply_target, msg_type="text",
+                           content=f"🐱 我注意到有些基础概念还不太熟，已经帮你插入了「{review_topic}·基础复习」任务。\n回复「继续」先复习巩固一下，再往下做～")
+
+        except Exception as e:
+            _log(f"[QUEUE] 批改异常: {e}")
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content=f"🐱 批改时出错了：{e}")
+
+    threading.Thread(target=_grade_task, daemon=True).start()
+    if is_auto:
+        send_feishu(receive_id=reply_target, msg_type="text",
+                   content=f"🐱 我看你有一会儿没继续发图片啦，已经先帮你自动提交批改了。\n如果还有漏拍的题，等这项批改完可以再告诉我～")
+    else:
+        send_feishu(receive_id=reply_target, msg_type="text",
+                   content=f"🐱 收到 {task['task_id']} 的 {len(task['image_paths'])} 张答案图片，正在批改中...")
+    return True
+
+def _organize_error_upload(sender_id: str, chat_id: str, reply_target: str, is_auto: bool = False) -> bool:
+    """整理错题上传图片。is_auto=True 表示自动整理。"""
+    q = _load_learning_queue()
+    if not q.get("error_upload_mode", {}).get("active"):
+        if not is_auto:
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content="🐱 当前不在错题整理模式哦～请先回复「上传错题」")
+        return True
+
+    # 检查是否已自动整理过
+    meta = _IMAGE_CACHE_META.get("__error_upload__", {})
+    if is_auto and meta.get("auto_submitted"):
+        return True
+
+    img_paths = q["error_upload_mode"].get("image_paths", [])
+    if not img_paths:
+        if not is_auto:
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content="🐱 还没有收到错题图片哦～请先发送图片")
+        return True
+
+    q["error_upload_mode"]["active"] = False
+    q["mode"] = "idle"
+    _save_learning_queue(q)
+    _IMAGE_CACHE_META.pop("__error_upload__", None)
+
+    # 异步处理错题
+    def _process_errors():
+        try:
+            session = _get_or_create_session(sender_id, chat_id)
+            all_ocr = []
+            for img_path in img_paths:
+                ocr_result = json.loads(enhanced_ocr_image(img_path))
+                if ocr_result.get("success"):
+                    all_ocr.append(ocr_result.get("text", ""))
+                try:
+                    Path(img_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+            ocr_text = "\n---\n".join(all_ocr)
+            auto_hint = "\n⚠️ 这是系统自动整理的（家长超时未手动整理）。\n" if is_auto else ""
+            result = run(
+                f"[系统上下文：飞书用户 sender_open_id={sender_id}, 回复目标ID={reply_target}]\n"
+                f"家长上传了学校错题图片，OCR识别结果：\n\n{ocr_text}\n\n"
+                f"{auto_hint}"
+                f"请执行错题分析流程（详见root.md第5节）：\n"
+                f"1. 提取每道错题的原题、错误答案、正确答案\n"
+                f"2. 分类错误类型（计算粗心/概念不清/审题偏差/方法错误）\n"
+                f"3. 分析根源原因\n"
+                f"4. 生成同类变式题\n"
+                f"5. 用 append_error_book 存入 error_book.json（不要用write_file！会覆盖已有数据！）\n"
+                f"6. 用 send_feishu(receive_id=\"{reply_target}\") 发送分析结果\n"
+                f"⚠️ 必须调用send_feishu！",
+                session,
+            )
+            _log(f"[QUEUE] 错题整理完成")
+        except Exception as e:
+            _log(f"[QUEUE] 错题整理异常: {e}")
+
+    threading.Thread(target=_process_errors, daemon=True).start()
+    if is_auto:
+        send_feishu(receive_id=reply_target, msg_type="text",
+                   content=f"📝 已自动开始整理刚才上传的错题图片。\n如果还有遗漏图片，可以稍后再次发送「上传错题」继续补充。")
+    else:
+        send_feishu(receive_id=reply_target, msg_type="text",
+                   content=f"🐱 收到 {len(img_paths)} 张错题图片，正在分析中...")
+    return True
+
+def _handle_queue_command(text: str, sender_id: str, chat_id: str, reply_target: str) -> bool:
+    """处理学习队列相关指令。返回True表示已拦截处理。"""
+    text_clean = text.strip().replace(" ", "").replace("\u3000", "")  # 去空格，兼容"出今日 任务"
+    
+    # ── 开始学习 ──
+    if text_clean in ("开始学习", "开始"):
+        q = _migrate_old_tasks_to_queue()
+        task = _get_next_pending_task(q)
+        if not task:
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content="🐱 当前没有待完成的学习任务！所有任务都完成啦，太棒了！")
+            return True
+        
+        # 设置当前活跃任务
+        q["active_task_id"] = task["task_id"]
+        q["mode"] = "answering"
+        task["status"] = "in_progress"
+        _save_learning_queue(q)
+        
+        # 重置自动提交标记
+        _IMAGE_CACHE_META.pop(task["task_id"], None)
+        
+        # 推送任务
+        _push_task_to_feishu(task, reply_target)
+        _log(f"[QUEUE] 开始学习: active={task['task_id']}")
+        return True
+    
+    # ── 提交 ──
+    if text_clean == "提交":
+        return _submit_active_task(sender_id, chat_id, reply_target, is_auto=False)
+    
+    # ── 继续 ──
+    if text_clean == "继续":
+        q = _load_learning_queue()
+        # 先检查当前任务是否已批改
+        active_id = q.get("active_task_id")
+        if active_id:
+            for t in q.get("queue", []):
+                if t["task_id"] == active_id and t.get("status") not in ("graded",):
+                    send_feishu(receive_id=reply_target, msg_type="text",
+                               content=f"🐱 当前任务 {active_id} 还没批改完哦～请先回复「提交」")
+                    return True
+        
+        # 找下一个待处理任务
+        task = _get_next_pending_task(q)
+        if not task:
+            q["active_task_id"] = None
+            q["mode"] = "idle"
+            _save_learning_queue(q)
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content="🐱 所有任务都完成啦！今天表现太棒了！🎉")
+            return True
+        
+        q["active_task_id"] = task["task_id"]
+        q["mode"] = "answering"
+        task["status"] = "in_progress"
+        _save_learning_queue(q)
+        _IMAGE_CACHE_META.pop(task["task_id"], None)
+        _push_task_to_feishu(task, reply_target)
+        return True
+    
+    # ── 任务清单 ──
+    if text_clean in ("任务清单", "今日任务", "进度", "今日进度"):
+        q = _migrate_old_tasks_to_queue()
+        if not q.get("queue"):
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content="🐱 当前没有学习任务记录。")
+            return True
+        
+        emoji_map = {"calc": "🔢", "math": "📐", "geometry": "📏", "vocab": "📚", "english": "📖", "error_review": "📝"}
+        status_map = {"pending": "❌ 未开始", "in_progress": "⏳ 进行中", "image_received": "📷 已收到图片",
+                      "submitted": "⏳ 待批改", "graded": "✅ 已完成", "skipped": "⏭️ 已跳过"}
+        
+        lines = ["🐱 当前学习队列", ""]
+        active_id = q.get("active_task_id", "")
+        for t in q["queue"]:
+            emoji = emoji_map.get(t.get("type", ""), "📋")
+            status = status_map.get(t.get("status", ""), "❓")
+            marker = " 👈 当前" if t["task_id"] == active_id else ""
+            lines.append(f"{emoji} {t['title']} {t['task_id']}：{status}{marker}")
+        
+        pending_count = sum(1 for t in q["queue"] if t.get("status") in ("pending", "in_progress", "image_received", "submitted"))
+        if pending_count > 0:
+            lines.append("")
+            lines.append(f"还有 {pending_count} 项任务待完成。")
+            if q.get("mode") == "answering" and active_id:
+                lines.append(f"当前正在做：{active_id}，完成后回复「提交」")
+            else:
+                lines.append("回复「开始学习」继续～")
+        
+        send_feishu(receive_id=reply_target, msg_type="text", content="\n".join(lines))
+        return True
+    
+    # ── 上传错题 ──
+    if text_clean in ("上传错题", "学校错题"):
+        q = _load_learning_queue()
+        q["error_upload_mode"] = {"active": True, "image_paths": []}
+        q["mode"] = "error_upload"
+        _save_learning_queue(q)
+        _IMAGE_CACHE_META.pop("__error_upload__", None)
+        send_feishu(receive_id=reply_target, msg_type="text",
+                   content="📝 已进入学校错题整理模式\n\n请连续发送学校错题图片。\n发完后回复「整理」开始分析。")
+        return True
+    
+    # ── 整理（错题）──
+    if text_clean == "整理":
+        return _organize_error_upload(sender_id, chat_id, reply_target, is_auto=False)
+    
+    # ── 手动触发今日学习任务 ──
+    if text_clean in ("今日学习", "出今日任务", "生成今日任务"):
+        send_feishu(receive_id=reply_target, msg_type="text",
+                   content="🐱 正在生成今日学习任务，请稍等...")
+        threading.Thread(target=scheduled_daily_push, daemon=True).start()
+        return True
+    
+    return False
 
 # ── 试卷编号生成 ──
 _test_id_counter = {}  # 按日期+前缀计数，防止重复
@@ -195,6 +821,7 @@ def _check_today_questions_completed():
 def _can_scheduled_push_today():
     """定时推送专用检查：防止旧题永久阻塞每日推送。
     规则：
+    - 学习队列中有未完成任务 → 不推送（等孩子做完）
     - 文件不存在 → 允许推送
     - 文件日期 = 今天 → 今天已推送，不重复
     - 文件日期 = 昨天且未完成 → 前一天未批改，不出后一天
@@ -202,6 +829,13 @@ def _can_scheduled_push_today():
     返回 (can_push: bool, reason: str)
     """
     today_str = datetime.now().strftime("%Y-%m-%d")
+
+    # ── 检查学习队列：有未完成任务就不出新题 ──
+    q = _load_learning_queue()
+    pending = [t for t in q.get("queue", []) if t.get("status") in ("pending", "in_progress", "image_received", "submitted")]
+    if pending:
+        return False, f"学习队列中还有 {len(pending)} 项任务未完成，先完成再出新题"
+
     today_file = DATA_DIR / "today_questions.json"
 
     if not today_file.exists():
@@ -300,6 +934,56 @@ def _handle_feishu_event(event: dict):
     target_desc = f"回复目标ID={reply_target}（群聊→发到群，私聊→发到用户）"
 
     print(f"[INFO] 飞书消息: sender={sender_id[:12]}... type={msg_type} text={text[:80]} reply_to={reply_target[:16]}...")
+
+    # ── 直接拦截"出今日任务"（最高优先级，不依赖队列指令匹配）──
+    text_nospace = text.replace(" ", "").replace("\u3000", "") if text else ""
+    if text_nospace in ("出今日任务", "生成今日任务"):
+        _log(f"[DIRECT] 直接拦截出今日任务: text={text[:60]}")
+        send_feishu(receive_id=reply_target, msg_type="text",
+                   content="🐱 正在生成今日学习任务，请稍等...")
+        threading.Thread(target=scheduled_daily_push, daemon=True).start()
+        return
+
+    # ── 学习队列指令拦截 ──
+    if text and _handle_queue_command(text, sender_id, chat_id, reply_target):
+        _log(f"[QUEUE] 队列指令已处理: {text[:60]}")
+        return
+
+    # ── 图片缓存：如果当前处于学习队列模式，图片自动绑定active_task ──
+    if msg_type == "image":
+        q = _load_learning_queue()
+        active_id = q.get("active_task_id")
+        error_upload = q.get("error_upload_mode", {})
+        
+        # 错题上传模式
+        if error_upload.get("active"):
+            image_key = content.get("image_key", "")
+            if image_key:
+                local_path = download_feishu_image(message_id, image_key)
+                if local_path:
+                    error_upload.setdefault("image_paths", []).append(local_path)
+                    now = time.time()
+                    meta = _IMAGE_CACHE_META.setdefault("__error_upload__", {"first_image_at": now, "last_image_at": now, "auto_submitted": False})
+                    meta["last_image_at"] = now
+                    _save_learning_queue(q)
+                    send_feishu(receive_id=reply_target, msg_type="text",
+                               content=f"📝 收到第 {len(error_upload['image_paths'])} 张错题图片。\n发完后回复「整理」开始分析。")
+            return
+        
+        # 学习队列模式：图片绑定当前任务
+        if active_id and q.get("mode") == "answering":
+            image_key = content.get("image_key", "")
+            if image_key:
+                local_path = download_feishu_image(message_id, image_key)
+                if local_path:
+                    cache = _IMAGE_CACHE.setdefault(active_id, [])
+                    cache.append({"path": local_path, "time": time.time()})
+                    now = time.time()
+                    meta = _IMAGE_CACHE_META.setdefault(active_id, {"first_image_at": now, "last_image_at": now, "auto_submitted": False})
+                    meta["last_image_at"] = now
+                    send_feishu(receive_id=reply_target, msg_type="text",
+                               content=f"🐱 收到 {active_id} 的第 {len(cache)} 张答案图片。\n如果还有图片，继续发。\n发完请回复「提交」开始批改。")
+            return
 
     # 使用会话缓存，保持对话历史
     session = _get_or_create_session(sender_id, chat_id)
@@ -512,6 +1196,15 @@ def _handle_feishu_event(event: dict):
     else:
         # ── Python层快速预检：发题/新题意图（仅拦截，不识别）──
         if _is_request_new_questions(text) and not _is_parent_adjust(text):
+            # "出今日任务"走学习队列模式
+            text_nospace = text.replace(" ", "").replace("\u3000", "")
+            if text_nospace in ("出今日任务", "生成今日任务"):
+                _log(f"[PRE-CHECK] 检测到出今日任务，走学习队列")
+                send_feishu(receive_id=reply_target, msg_type="text",
+                           content="🐱 正在生成今日学习任务，请稍等...")
+                threading.Thread(target=scheduled_daily_push, daemon=True).start()
+                return
+            
             can_gen, reason = _check_today_questions_completed()
             _log(f"[PRE-CHECK] 发题意图检测: can_gen={can_gen}, reason={reason}")
             if not can_gen:
@@ -679,11 +1372,11 @@ def _handle_feishu_event(event: dict):
                     f"2. 有全局题号→直接匹配题目；有试卷编号→读对应文件；都没有→读today_questions.json\n"
                     f"3. 全局题号格式：Q+6位数字（如Q000001），跨所有试卷唯一\n"
                     f"4. ⚠️ 如果答案与题目明显不符，不要直接判错！先send_feishu问是哪套题\n"
-                    f"5. call_llm批改→更新mastery/error_book\n"
-                    f"6. ⚠️ 错题存入error_book.json时，必须包含试卷编号字段：\n"
-                    f"   {{\"id\":\"E{datetime.now().strftime('%m%d')}01\",\"test_id\":\"原试卷编号\",\"date\":\"{datetime.now().strftime('%Y-%m-%d')}\",\"question\":\"...\",\"student_answer\":\"...\",\"correct_answer\":\"...\",\"error_type\":\"...\",\"reviewed_date\":null}}\n"
-                    f"   错题编号格式：E+MMDD+序号，如E060901\n"
-                    f"7. send_feishu(receive_id=\"{reply_target}\")回复批改结果\n"
+                f"5. call_llm批改→更新mastery/error_book\n"
+                f"6. ⚠️ 错题用 append_error_book 工具存入error_book.json（不要用write_file！会覆盖已有数据！），必须包含试卷编号字段：\n"
+                f"   {{\"error_id\":\"E{datetime.now().strftime('%m%d')}01\",\"test_id\":\"原试卷编号\",\"date\":\"{datetime.now().strftime('%Y-%m-%d')}\",\"question\":\"...\",\"student_answer\":\"...\",\"correct_answer\":\"...\",\"error_type\":\"...\",\"reviewed_date\":null}}\n"
+                f"   错题编号格式：E+MMDD+序号，如E060901\n"
+                f"7. send_feishu(receive_id=\"{reply_target}\")回复批改结果\n"
                     f"⚠️ 铁则：必须调用send_feishu发送结果！",
                     session,
                 )
@@ -772,110 +1465,73 @@ def _log(msg: str):
 
 
 def scheduled_daily_push():
-    """定时每日推送学习任务：先检查日期和完成状态 → 读取数据 → LLM出题 → 推送。"""
-    _log(f"[SCHEDULER] 执行每日推送: {datetime.now()}")
+    """定时每日推送：从 config.toml [[tasks]] 读取任务配置，逐个生成，全部入队列，只推送第一个。"""
+    _log(f"[SCHEDULER] ====== 开始执行每日推送 ======")
+    _log(f"[SCHEDULER] 时间: {datetime.now()}")
 
-    # ── Python层前置检查（含日期判断，防止旧题永久阻塞）──
     can_push, reason = _can_scheduled_push_today()
     _log(f"[SCHEDULER] 推送前置检查: can_push={can_push}, reason={reason}")
     if not can_push:
         _log(f"[SCHEDULER] ⛔ 跳过推送: {reason}")
         return
-    
-    # 读轮询配置，获取推送目标
+
     poll_cfg = CFG.get("feishu", {}).get("poll", {})
-    target_chat_ids = poll_cfg.get("chat_ids", [])
-    if not target_chat_ids:
+    if not poll_cfg.get("chat_ids"):
         _log("[SCHEDULER] 未配置推送目标 chat_ids，跳过")
         return
-    
-    chat_ids_str = json.dumps(target_chat_ids, ensure_ascii=False)
-    _log(f"[SCHEDULER] 推送目标: {chat_ids_str}")
-    
+
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    tasks_cfg = CFG.get("tasks", [])
+    if not tasks_cfg:
+        _log("[SCHEDULER] ⛔ config.toml 中未配置 [[tasks]]，跳过")
+        return
+
+    # 临时从工具列表中移除 send_feishu，LLM 根本调不到
+    _saved_send_feishu = _core_mod.TOOLS.pop("send_feishu", None)
+    _saved_schema = None
+    for i, s in enumerate(_core_mod.TOOL_SCHEMAS):
+        if s.get("function", {}).get("name") == "send_feishu":
+            _saved_schema = _core_mod.TOOL_SCHEMAS.pop(i)
+            break
+
     try:
-        _log("[SCHEDULER] 初始化 LLM 会话...")
-        session = init_new_session()
-        _log("[SCHEDULER] 开始 LLM 出题流程...")
-        result = run(
-            "请执行完整的每日出题推送流程。\n\n"
-            "═══════════════════════════════════════\n"
-            "第零步：生成编号\n"
-            "═══════════════════════════════════════\n"
-            f"test_id = \"{_gen_test_id('T')}\"\n"
-            "每道题用 _gen_question_id() 生成全局唯一编号（Q000001, Q000002...）\n"
-            "编号跨所有试卷永不重复，学生回复编号即可精准匹配\n"
-            "在卡片标题中显示「📋 试卷：{test_id}」\n\n"
-            "═══════════════════════════════════════\n"
-            "第一步：读取数据\n"
-            "═══════════════════════════════════════\n"
-            "1. 读取 data/mastery.json → 找到首批薄弱知识点（score<95的先出，95分达标线）\n"
-            "2. 读取 data/error_book.json → 按艾宾浩斯曲线检查今天该复习的错题\n"
-            "3. 读取 data/adjustments.json → 获取题数/难度设置\n"
-            "4. 读取 data/knowledge_map.json → 确认知识范围\n\n"
-            "═══════════════════════════════════════\n"
-            "第二步：出题（用 call_llm，严格质量）\n"
-            "═══════════════════════════════════════\n"
-            "数学题要求（难度=hard，7单元均衡分布）：\n"
-            "- ⚠️ 7个单元均衡出题，禁止集中在一个单元！\n"
-            "- 单元分布：乘法1题 + 除法1题 + 周长1题 + 图形运动/数据/实践活动轮换1题\n"
-            "- 第五单元（关系与规律）最多1题，不能超过25%！\n"
-            "- ⚠️ 只出「提升」和「拓展」难度，禁止出基础题\n"
-            "- ⚠️ 禁用具体水果/物品名称，改用「圆形」「三角形」「正方形」或纯文字\n"
-            "- 每道题至少需要2步以上推理才能完成\n"
-            "- 应用题从实际场景中抽象数学模型（购物找零、出行时间、分物余数等）\n"
-            "- 图形题结合测量、估算、空间想象\n"
-            "- 包含：计算应用40% + 周长/图形30% + 单位换算20% + 规律推理10%\n"
-            "- 每道题给出完整标准答案和详细解题思路\n\n"
-            "英语KET题要求（难度=KET A2标准，不能太简单）：\n"
-            "- ⚠️ 先读 KET备考计划.md 确认当前备考阶段和语法范围\n"
-            "- ⚠️ 再读 root.md「KET题型格式模板」确认每种题型的格式要求\n"
-            "- ⚠️ 填空/改错/完形填空必须包含完整原文！\n"
-            "- ⚠️ 难度对齐KET真题：阅读短文≥80词，完形≥5空，写作≥35词\n"
-            "- ⚠️ 重点倾斜：写作35% + 词汇25% + 语法20% + 阅读10% + 听力口语各5%\n"
-            "- 写作题：≥35词短文（如写邮件、描述图片、讲故事），给范文+评分要点\n"
-            "- 词汇题：同义词辨析、短语搭配、语境选词，不只考拼写\n"
-            "- 语法题：时态填空、改错、句型转换，标注KET语法点编号\n"
-            "- 阅读题：信息匹配、阅读理解（≥80词短文+3个问题）\n"
-            "- 包含：短文写作+阅读理解+语法填空+词汇选择+完形填空\n"
-            "- 每道题给出完整标准答案、纠错提示和知识点链接\n\n"
-            "═══════════════════════════════════════\n"
-            "第三步：KET词汇学习（每日必做，KET风格）\n"
-            "═══════════════════════════════════════\n"
-            "- ⚠️ 先读取 data/ket_vocabulary.json 获取已学词和生词\n"
-            "- 从生词中选5个新词，用KET风格出题：\n"
-            "  【英英释义匹配】给出英文释义，让学生选对应的单词\n"
-            "  例：This is a fruit. It is red or green. You can eat it. → 答案：apple\n"
-            "  【语境填空】给出英文句子，用英文提示让学生填词\n"
-            "  例：I drink _____ every morning. (a white drink from cows) → 答案：milk\n"
-            "- 从已学词中选5个复习（英英释义+语境填空）\n"
-            "- 将新词写入 data/ket_vocabulary.json（与单词训练营共享同一文件）\n"
-            "- 格式：[{{\"word\":\"apple\",\"chinese\":\"苹果\",\"pos\":\"n.\",\"example\":\"I eat an apple.\",\"learned_date\":\"{datetime.now().strftime('%Y-%m-%d')}\",\"review_dates\":[],\"mastered\":false}}]\n\n"
-            "═══════════════════════════════════════\n"
-            "第四步：存储 → 存入 data/today_questions.json\n"
-            "═══════════════════════════════════════\n"
-            f"格式：{{\"test_id\":\"{_gen_test_id('T')}\",\"date\":\"{datetime.now().strftime('%Y-%m-%d')}\",\"math\":[{{id,question,answer,hint,difficulty,topic_id}}],\"english\":[{{id,question,answer,hint,topic_id}}],\"vocab\":[{{id,question,answer,hint}}]}}\n\n"
-            "═══════════════════════════════════════\n"
-            "第五步：推送 → 用 send_feishu 发卡片到每个 chat\n"
-            "═══════════════════════════════════════\n"
-            f"推送目标聊天ID：{chat_ids_str}\n"
-            "⚠️ 必须发两张卡片：\n"
-            "  卡片1：数学+英语题目\n"
-            "  卡片2：KET词汇测试（英英释义+语境填空，10题）\n"
-            "卡片消息格式要求：\n"
-            f"- ⚠️ 日期必须是今天：{datetime.now().strftime('%Y-%m-%d')}（{['周一','周二','周三','周四','周五','周六','周日'][datetime.now().weekday()]}），禁止用其他日期\n"
-            "- 使用 interactive 卡片，header 用 orange 色\n"
-            f"- 标题必须用「🐱 小肥猫今日学习任务（{datetime.now().strftime('%-m月%-d日')} {['周一','周二','周三','周四','周五','周六','周日'][datetime.now().weekday()]}）」\n"
-            "- 词汇卡片标题用「📖 今日KET词汇（{datetime.now().strftime('%-m月%-d日')}）」\n"
-            "- 数学区用 📐 标识，英语区用 📖 标识\n"
-            "- 每道题单独编号（如「第1题」「第2题」），方便小朋友回复\n"
-            "- 末尾明确告诉小朋友：回复时请写「第X题答案是...」，可以拍照也可以打字\n"
-            "- 加上🐱鼓励语，语气温暖亲切\n\n"
-            "⚠️ 重要：send_feishu 的 receive_id 参数就是上面提供的 chat_id（oc_开头），系统会自动识别为聊天ID。",
-            session,
-        )
-        _log(f"[SCHEDULER] 每日推送完成: {result[:300] if result else 'None'}")
+        for task_cfg in sorted(tasks_cfg, key=lambda t: t.get("priority", 99)):
+            ttype = task_cfg["type"]
+            prefix = task_cfg.get("prefix", "X")
+            prompt_file = task_cfg.get("prompt_file", "")
+            output_file_tpl = task_cfg.get("output_file", "")
+            test_id = _gen_test_id(prefix)
+            output_file = output_file_tpl.replace("{today_str}", today_str)
+
+            _log(f"[SCHEDULER] 开始 {ttype} 出题 (test_id={test_id})...")
+
+            prompt_path = HOME / prompt_file
+            if not prompt_path.exists():
+                _log(f"[SCHEDULER] ⚠️ prompt 文件不存在: {prompt_file}，跳过 {ttype}")
+                continue
+            prompt_template = prompt_path.read_text(encoding="utf-8")
+            prompt = prompt_template.format(test_id=test_id, today_str=today_str)
+
+            session = init_new_session()
+            run(prompt, session)
+
+            _add_task_to_queue(test_id, today_str, ttype, str(DATA_DIR / output_file.replace("data/", "")))
+            _log(f"[SCHEDULER] {ttype} 出题完成，已加入队列")
+
+        # 恢复 send_feishu 工具
+        if _saved_send_feishu:
+            _core_mod.TOOLS["send_feishu"] = _saved_send_feishu
+        if _saved_schema:
+            _core_mod.TOOL_SCHEMAS.append(_saved_schema)
+
+        _push_first_pending_to_all()
+        _log(f"[SCHEDULER] ====== 每日推送完成，共 {len(tasks_cfg)} 个任务 ======")
     except Exception as e:
-        _log(f"[SCHEDULER] 每日推送失败: {e}")
+        if _saved_send_feishu:
+            _core_mod.TOOLS["send_feishu"] = _saved_send_feishu
+        if _saved_schema:
+            _core_mod.TOOL_SCHEMAS.append(_saved_schema)
+        _log(f"[SCHEDULER] ====== 每日推送失败: {e} ======")
         _log(traceback.format_exc())
 
 
@@ -941,21 +1597,21 @@ def scheduled_weekly_test():
 
 
 def scheduled_daily_vocab():
-    """每日KET词汇推送：英英释义+语境填空，与单词训练营共享词库。"""
+    """每日KET词汇推送：LLM出题 → 存文件 → 加入学习队列。"""
     _log(f"[SCHEDULER] 执行每日词汇推送: {datetime.now()}")
     poll_cfg = CFG.get("feishu", {}).get("poll", {})
-    target_chat_ids = poll_cfg.get("chat_ids", [])
-    if not target_chat_ids:
+    if not poll_cfg.get("chat_ids"):
         return
-    chat_ids_str = json.dumps(target_chat_ids, ensure_ascii=False)
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    test_id = _gen_test_id('V')
     try:
         session = init_new_session()
         result = run(
-            "请执行每日KET词汇推送。\n\n"
+            "请执行每日KET词汇出题。\n\n"
             "═══════════════════════════════════════\n"
             "第零步：生成编号\n"
             "═══════════════════════════════════════\n"
-            f"test_id = \"{_gen_test_id('V')}\"\n"
+            f"test_id = \"{test_id}\"\n"
             "每道题用 _gen_question_id() 生成全局唯一编号\n"
             "在卡片标题中显示「📋 试卷：{test_id}」\n\n"
             "═══════════════════════════════════════\n"
@@ -981,36 +1637,39 @@ def scheduled_daily_vocab():
             "- 将复习词review_count+1，如>=3则status改为'mastered'\n"
             "- 用 write_file 更新 data/ket_vocabulary.json\n\n"
             "═══════════════════════════════════════\n"
-            "第四步：推送\n"
+            "第四步：存储\n"
             "═══════════════════════════════════════\n"
-            f"推送目标：{chat_ids_str}\n"
-            f"标题：📖 今日KET词汇（{datetime.now().strftime('%-m月%-d日')}）\n"
-            "用 send_feishu 发送词汇卡片（10题：5新词+5复习）\n"
-            "⚠️ 必须调用 send_feishu 发送结果！",
+            f"用 write_file 存入 data/questions/questions_{today_str}_vocab.json\n"
+            f"格式：{{\"test_id\":\"{test_id}\",\"date\":\"{today_str}\",\"type\":\"vocab\",\"questions\":[{{id,question,answer,hint}}]}}\n\n"
+            "⚠️ 注意：只存储，不要调用 send_feishu 推送！系统会自动从学习队列推送。",
             session,
         )
-        _log(f"[SCHEDULER] 词汇推送完成: {result[:200] if result else 'None'}")
+        _log(f"[SCHEDULER] 词汇出题完成: {result[:200] if result else 'None'}")
+        qf = str(DATA_DIR / "questions" / f"questions_{today_str}_vocab.json")
+        _add_task_to_queue(test_id, today_str, "vocab", qf)
+        _push_first_pending_to_all()
+        _log(f"[SCHEDULER] 词汇已加入学习队列: {test_id}")
     except Exception as e:
         _log(f"[SCHEDULER] 词汇推送失败: {e}")
         _log(traceback.format_exc())
 
 
 def scheduled_daily_calc():
-    """每日数学计算专项：加减乘除+四则混合运算，重点练速度和准确度。"""
+    """每日数学计算专项：LLM出题 → 存文件 → 加入学习队列。"""
     _log(f"[SCHEDULER] 执行每日计算专项: {datetime.now()}")
     poll_cfg = CFG.get("feishu", {}).get("poll", {})
-    target_chat_ids = poll_cfg.get("chat_ids", [])
-    if not target_chat_ids:
+    if not poll_cfg.get("chat_ids"):
         return
-    chat_ids_str = json.dumps(target_chat_ids, ensure_ascii=False)
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    test_id = _gen_test_id('C')
     try:
         session = init_new_session()
         result = run(
-            "请执行每日数学计算专项推送。\n\n"
+            "请执行每日数学计算专项出题。\n\n"
             "═══════════════════════════════════════\n"
             "第零步：生成编号\n"
             "═══════════════════════════════════════\n"
-            f"test_id = \"{_gen_test_id('C')}\"\n"
+            f"test_id = \"{test_id}\"\n"
             "每道题用 _gen_question_id() 生成全局唯一编号\n"
             "在卡片标题中显示「📋 试卷：{test_id}」\n\n"
             "═══════════════════════════════════════\n"
@@ -1022,26 +1681,96 @@ def scheduled_daily_calc():
             "- 四则混合运算：2题（如 25+36÷6=, (45-18)×3=）\n"
             "- 连乘/连除：2题（如 12×3×2=, 96÷4÷2=）\n"
             "- ⚠️ 纯计算题，不需要应用题，不需要图形\n"
-            "- 每道题给出标准答案\n"
-            "- 卡片标题：「🧮 今日计算专项（{datetime.now().strftime('%-m月%-d日')}）」\n"
-            "- 提示学生：限时10分钟完成，记录用时\n\n"
+            "- 每道题给出标准答案\n\n"
             "═══════════════════════════════════════\n"
             "存储\n"
             "═══════════════════════════════════════\n"
-            f"用 write_file 存入 data/questions/questions_{datetime.now().strftime('%Y-%m-%d')}_calc.json\n"
-            f"格式：{{\"test_id\":\"{_gen_test_id('C')}\",\"date\":\"{datetime.now().strftime('%Y-%m-%d')}\",\"type\":\"calc\",\"questions\":[{{id,question,answer}}]}}\n\n"
-            "═══════════════════════════════════════\n"
-            "推送\n"
-            "═══════════════════════════════════════\n"
-            f"推送目标：{chat_ids_str}\n"
-            "用 send_feishu 发送计算卡片\n"
-            "⚠️ 必须调用 send_feishu 发送结果！",
+            f"用 write_file 存入 data/questions/questions_{today_str}_calc.json\n"
+            f"格式：{{\"test_id\":\"{test_id}\",\"date\":\"{today_str}\",\"type\":\"calc\",\"questions\":[{{id,question,answer}}]}}\n\n"
+            "⚠️ 注意：只存储，不要调用 send_feishu 推送！系统会自动从学习队列推送。",
             session,
         )
-        _log(f"[SCHEDULER] 计算专项完成: {result[:200] if result else 'None'}")
+        _log(f"[SCHEDULER] 计算出题完成: {result[:200] if result else 'None'}")
+        qf = str(DATA_DIR / "questions" / f"questions_{today_str}_calc.json")
+        _add_task_to_queue(test_id, today_str, "calc", qf)
+        _push_first_pending_to_all()
+        _log(f"[SCHEDULER] 计算已加入学习队列: {test_id}")
     except Exception as e:
         _log(f"[SCHEDULER] 计算专项失败: {e}")
         _log(traceback.format_exc())
+
+
+def scheduled_auto_submit_uploads():
+    """自动提交长时间未结束的图片上传任务。
+    - 学习任务图片缓存超过5分钟未更新 → 自动提交
+    - 错题上传图片超过10分钟未更新 → 自动整理
+    """
+    now = time.time()
+    q = _load_learning_queue()
+
+    # ── 检查学习任务图片缓存 ──
+    active_id = q.get("active_task_id")
+    if active_id and q.get("mode") == "answering":
+        meta = _IMAGE_CACHE_META.get(active_id, {})
+        if meta and not meta.get("auto_submitted"):
+            last_at = meta.get("last_image_at", 0)
+            if last_at > 0 and (now - last_at) > _AUTO_SUBMIT_TIMEOUT_LEARNING:
+                # 检查是否有图片缓存
+                cached = _IMAGE_CACHE.get(active_id, [])
+                if cached:
+                    _log(f"[AUTO-SUBMIT] 学习任务 {active_id} 超时 {int(now - last_at)}s，自动提交")
+                    meta["auto_submitted"] = True
+                    _IMAGE_CACHE_META[active_id] = meta
+                    # 需要知道 reply_target，从队列配置中获取
+                    poll_cfg = CFG.get("feishu", {}).get("poll", {})
+                    chat_ids = poll_cfg.get("chat_ids", [])
+                    if chat_ids:
+                        _submit_active_task("auto", chat_ids[0], chat_ids[0], is_auto=True)
+
+    # ── 检查错题上传图片缓存 ──
+    error_upload = q.get("error_upload_mode", {})
+    if error_upload.get("active"):
+        meta = _IMAGE_CACHE_META.get("__error_upload__", {})
+        if meta and not meta.get("auto_submitted"):
+            last_at = meta.get("last_image_at", 0)
+            if last_at > 0 and (now - last_at) > _AUTO_SUBMIT_TIMEOUT_ERROR:
+                img_paths = error_upload.get("image_paths", [])
+                if img_paths:
+                    _log(f"[AUTO-SUBMIT] 错题上传超时 {int(now - last_at)}s，自动整理")
+                    meta["auto_submitted"] = True
+                    _IMAGE_CACHE_META["__error_upload__"] = meta
+                    poll_cfg = CFG.get("feishu", {}).get("poll", {})
+                    chat_ids = poll_cfg.get("chat_ids", [])
+                    if chat_ids:
+                        _organize_error_upload("auto", chat_ids[0], chat_ids[0], is_auto=True)
+
+
+def scheduled_image_cleanup():
+    """每日清理超过1天的图片，释放服务器空间。"""
+    _log(f"[CLEANUP] 执行图片清理: {datetime.now()}")
+    images_dir = DATA_DIR / "images"
+    if not images_dir.exists():
+        return
+    
+    cutoff = time.time() - 86400  # 1天前
+    deleted = 0
+    freed = 0
+    for f in images_dir.iterdir():
+        if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg", ".png", ".gif"):
+            try:
+                mtime = f.stat().st_mtime
+                if mtime < cutoff:
+                    size = f.stat().st_size
+                    f.unlink()
+                    deleted += 1
+                    freed += size
+            except Exception:
+                pass
+    
+    if deleted > 0:
+        _log(f"[CLEANUP] 已清理 {deleted} 张图片，释放 {freed / 1024 / 1024:.1f}MB")
+    else:
+        _log(f"[CLEANUP] 无需清理的图片")
 
 
 def start_scheduler():
@@ -1050,18 +1779,14 @@ def start_scheduler():
     scheduler = BackgroundScheduler()
     scheduler.add_job(scheduled_daily_push, 'cron', hour=hour, minute=minute, id='daily_push')
     
-    # 每日词汇推送（比主推送晚5分钟）
-    vocab_minute = (minute + 5) % 60
-    vocab_hour = hour + (1 if minute + 5 >= 60 else 0)
-    scheduler.add_job(scheduled_daily_vocab, 'cron', hour=vocab_hour, minute=vocab_minute, id='daily_vocab')
-    
-    # 每日计算专项（比词汇推送晚5分钟）
-    calc_minute = (vocab_minute + 5) % 60
-    calc_hour = vocab_hour + (1 if vocab_minute + 5 >= 60 else 0)
-    scheduler.add_job(scheduled_daily_calc, 'cron', hour=calc_hour, minute=calc_minute, id='daily_calc')
-    
     # 每周日综合测试
     scheduler.add_job(scheduled_weekly_test, 'cron', day_of_week='sun', hour=hour, minute=minute, id='weekly_test')
+    
+    # 每日凌晨3点清理超过1天的图片
+    scheduler.add_job(scheduled_image_cleanup, 'cron', hour=3, minute=0, id='image_cleanup')
+    
+    # 自动提交扫描：每60秒检查一次超时未提交的图片上传
+    scheduler.add_job(scheduled_auto_submit_uploads, 'interval', seconds=_AUTO_SUBMIT_SCAN_INTERVAL, id='auto_submit_scan')
     
     # 飞书消息轮询
     poll_cfg = CFG.get("feishu", {}).get("poll", {})
@@ -1071,7 +1796,7 @@ def start_scheduler():
         print(f"[POLL] 飞书消息轮询已启动，间隔 {interval}s，监控 {len(poll_cfg['chat_ids'])} 个聊天")
     
     scheduler.start()
-    print(f"[SCHEDULER] 已启动，每日 {push_time} 推送 + 词汇 + 周日综合测试")
+    print(f"[SCHEDULER] 已启动，每日 {push_time} 推送（含综合+词汇+计算）+ 周日综合测试 + 图片清理")
 
 
 # ══════════════════════════════════════════════════════════════════════
