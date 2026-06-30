@@ -1485,32 +1485,31 @@ def scheduled_daily_push():
         _log(f"[SCHEDULER] ====== 开始执行每日推送 ======")
         _log(f"[SCHEDULER] 时间: {datetime.now()}")
 
-    can_push, reason = _can_scheduled_push_today()
-    _log(f"[SCHEDULER] 推送前置检查: can_push={can_push}, reason={reason}")
-    if not can_push:
-        _log(f"[SCHEDULER] ⛔ 跳过推送: {reason}")
-        return
+        can_push, reason = _can_scheduled_push_today()
+        _log(f"[SCHEDULER] 推送前置检查: can_push={can_push}, reason={reason}")
+        if not can_push:
+            _log(f"[SCHEDULER] ⛔ 跳过推送: {reason}")
+            return
 
-    poll_cfg = CFG.get("feishu", {}).get("poll", {})
-    if not poll_cfg.get("chat_ids"):
-        _log("[SCHEDULER] 未配置推送目标 chat_ids，跳过")
-        return
+        poll_cfg = CFG.get("feishu", {}).get("poll", {})
+        if not poll_cfg.get("chat_ids"):
+            _log("[SCHEDULER] 未配置推送目标 chat_ids，跳过")
+            return
 
-    today_str = datetime.now().strftime('%Y-%m-%d')
-    tasks_cfg = CFG.get("tasks", [])
-    if not tasks_cfg:
-        _log("[SCHEDULER] ⛔ config.toml 中未配置 [[tasks]]，跳过")
-        return
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        tasks_cfg = CFG.get("tasks", [])
+        if not tasks_cfg:
+            _log("[SCHEDULER] ⛔ config.toml 中未配置 [[tasks]]，跳过")
+            return
 
-    # 临时从工具列表中移除 send_feishu，LLM 根本调不到
-    _saved_send_feishu = _core_mod.TOOLS.pop("send_feishu", None)
-    _saved_schema = None
-    for i, s in enumerate(_core_mod.TOOL_SCHEMAS):
-        if s.get("function", {}).get("name") == "send_feishu":
-            _saved_schema = _core_mod.TOOL_SCHEMAS.pop(i)
-            break
+        # 临时从工具列表中移除 send_feishu，LLM 根本调不到
+        _saved_send_feishu = _core_mod.TOOLS.pop("send_feishu", None)
+        _saved_schema = None
+        for i, s in enumerate(_core_mod.TOOL_SCHEMAS):
+            if s.get("function", {}).get("name") == "send_feishu":
+                _saved_schema = _core_mod.TOOL_SCHEMAS.pop(i)
+                break
 
-    try:
         # 生成所有 test_id
         test_ids = {}
         for task_cfg in sorted(tasks_cfg, key=lambda t: t.get("priority", 99)):
