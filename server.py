@@ -158,9 +158,15 @@ def _save_learning_queue(q: dict):
     _LEARNING_QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
     _LEARNING_QUEUE_FILE.write_text(json.dumps(q, ensure_ascii=False, indent=2), encoding="utf-8")
 
+_MIGRATION_DONE = False
+
 def _migrate_old_tasks_to_queue():
-    """扫描历史题目，把未完成任务迁移进学习队列。"""
+    """扫描历史题目，把未完成任务迁移进学习队列（仅首次调用执行）。"""
+    global _MIGRATION_DONE
     q = _load_learning_queue()
+    if _MIGRATION_DONE:
+        return q
+    _MIGRATION_DONE = True
     existing_ids = {t["task_id"] for t in q.get("queue", [])}
     
     # 扫描 questions/ 目录
@@ -343,6 +349,8 @@ def _push_task_to_feishu(task: dict, reply_target: str):
                 lines.append(f"  • {sp}")
         
         lines.append("")
+        if task_type == "geometry":
+            lines.append("⚠️ 几何题配有图形，请查看飞书消息中的图片。")
         lines.append("请在纸上写下答案，拍照后直接发给我。")
         lines.append("发完所有图片后回复「提交」开始批改。")
         lines.append("🐱 加油！")
@@ -627,8 +635,10 @@ def _handle_queue_command(text: str, sender_id: str, chat_id: str, reply_target:
         q = _migrate_old_tasks_to_queue()
         task = _get_next_pending_task(q)
         if not task:
+            # 队列为空，自动触发每日出题
             send_feishu(receive_id=reply_target, msg_type="text",
-                       content="🐱 当前没有待完成的学习任务！所有任务都完成啦，太棒了！")
+                       content="🐱 当前没有待完成的学习任务，正在为你生成今日任务，请稍等...")
+            threading.Thread(target=scheduled_daily_push, daemon=True).start()
             return True
         
         # 设置当前活跃任务
@@ -1610,109 +1620,7 @@ def scheduled_weekly_test():
         _log(traceback.format_exc())
 
 
-def scheduled_daily_vocab():
-    """每日KET词汇推送：LLM出题 → 存文件 → 加入学习队列。"""
-    _log(f"[SCHEDULER] 执行每日词汇推送: {datetime.now()}")
-    poll_cfg = CFG.get("feishu", {}).get("poll", {})
-    if not poll_cfg.get("chat_ids"):
-        return
-    today_str = datetime.now().strftime('%Y-%m-%d')
-    test_id = _gen_test_id('V')
-    try:
-        session = init_new_session()
-        result = run(
-            "请执行每日KET词汇出题。\n\n"
-            "═══════════════════════════════════════\n"
-            "第零步：生成编号\n"
-            "═══════════════════════════════════════\n"
-            f"test_id = \"{test_id}\"\n"
-            "每道题用 _gen_question_id() 生成全局唯一编号\n"
-            "在卡片标题中显示「📋 试卷：{test_id}」\n\n"
-            "═══════════════════════════════════════\n"
-            "第一步：读取词库\n"
-            "═══════════════════════════════════════\n"
-            "1. 读取 data/ket_vocabulary.json（如不存在则用 call_llm 从KET词表创建，至少50词）\n"
-            "2. 筛选：status='new'的选5个新词，status='learning'的选5个复习词\n\n"
-            "═══════════════════════════════════════\n"
-            "第二步：出题（KET风格，英英释义）\n"
-            "═══════════════════════════════════════\n"
-            "⚠️ 必须用英语解释英语，禁止出现中文！\n"
-            "新词5题（英英释义匹配）：\n"
-            "- 格式：给出英文释义，4个选项（同主题词），选正确单词\n"
-            "- 例：This is a fruit. It is red or green. You can eat it.\n"
-            "      A. bread  B. apple  C. chicken  D. rice\n"
-            "复习词5题（语境填空）：\n"
-            "- 格式：英文句子+英文提示，填单词\n"
-            "- 例：I drink _____ every morning. (a white drink from cows)\n\n"
-            "═══════════════════════════════════════\n"
-            "第三步：更新词库\n"
-            "═══════════════════════════════════════\n"
-            "- 将新词status改为'learning'，learned_date设为今天\n"
-            "- 将复习词review_count+1，如>=3则status改为'mastered'\n"
-            "- 用 write_file 更新 data/ket_vocabulary.json\n\n"
-            "═══════════════════════════════════════\n"
-            "第四步：存储\n"
-            "═══════════════════════════════════════\n"
-            f"用 write_file 存入 data/questions/questions_{today_str}_vocab.json\n"
-            f"格式：{{\"test_id\":\"{test_id}\",\"date\":\"{today_str}\",\"type\":\"vocab\",\"questions\":[{{id,question,answer,hint}}]}}\n\n"
-            "⚠️ 注意：只存储，不要调用 send_feishu 推送！系统会自动从学习队列推送。",
-            session,
-        )
-        _log(f"[SCHEDULER] 词汇出题完成: {result[:200] if result else 'None'}")
-        qf = str(DATA_DIR / "questions" / f"questions_{today_str}_vocab.json")
-        _add_task_to_queue(test_id, today_str, "vocab", qf)
-        _push_first_pending_to_all()
-        _log(f"[SCHEDULER] 词汇已加入学习队列: {test_id}")
-    except Exception as e:
-        _log(f"[SCHEDULER] 词汇推送失败: {e}")
-        _log(traceback.format_exc())
-
-
-def scheduled_daily_calc():
-    """每日数学计算专项：LLM出题 → 存文件 → 加入学习队列。"""
-    _log(f"[SCHEDULER] 执行每日计算专项: {datetime.now()}")
-    poll_cfg = CFG.get("feishu", {}).get("poll", {})
-    if not poll_cfg.get("chat_ids"):
-        return
-    today_str = datetime.now().strftime('%Y-%m-%d')
-    test_id = _gen_test_id('C')
-    try:
-        session = init_new_session()
-        result = run(
-            "请执行每日数学计算专项出题。\n\n"
-            "═══════════════════════════════════════\n"
-            "第零步：生成编号\n"
-            "═══════════════════════════════════════\n"
-            f"test_id = \"{test_id}\"\n"
-            "每道题用 _gen_question_id() 生成全局唯一编号\n"
-            "在卡片标题中显示「📋 试卷：{test_id}」\n\n"
-            "═══════════════════════════════════════\n"
-            "出题要求（纯计算，10题，适合小学生）：\n"
-            "═══════════════════════════════════════\n"
-            "- 两位数×一位数：2题（如 47×6=）\n"
-            "- 三位数÷一位数：2题（如 258÷3=）\n"
-            "- 三位数加减法：2题（如 456+278=, 803-267=）\n"
-            "- 四则混合运算：2题（如 25+36÷6=, (45-18)×3=）\n"
-            "- 连乘/连除：2题（如 12×3×2=, 96÷4÷2=）\n"
-            "- ⚠️ 纯计算题，不需要应用题，不需要图形\n"
-            "- 每道题给出标准答案\n\n"
-            "═══════════════════════════════════════\n"
-            "存储\n"
-            "═══════════════════════════════════════\n"
-            f"用 write_file 存入 data/questions/questions_{today_str}_calc.json\n"
-            f"格式：{{\"test_id\":\"{test_id}\",\"date\":\"{today_str}\",\"type\":\"calc\",\"questions\":[{{id,question,answer}}]}}\n\n"
-            "⚠️ 注意：只存储，不要调用 send_feishu 推送！系统会自动从学习队列推送。",
-            session,
-        )
-        _log(f"[SCHEDULER] 计算出题完成: {result[:200] if result else 'None'}")
-        qf = str(DATA_DIR / "questions" / f"questions_{today_str}_calc.json")
-        _add_task_to_queue(test_id, today_str, "calc", qf)
-        _push_first_pending_to_all()
-        _log(f"[SCHEDULER] 计算已加入学习队列: {test_id}")
-    except Exception as e:
-        _log(f"[SCHEDULER] 计算专项失败: {e}")
-        _log(traceback.format_exc())
-
+# scheduled_daily_vocab 和 scheduled_daily_calc 已合并到 scheduled_daily_push（v3.6）
 
 def scheduled_auto_submit_uploads():
     """自动提交长时间未结束的图片上传任务。
