@@ -766,6 +766,18 @@ def _handle_queue_command(text: str, sender_id: str, chat_id: str, reply_target:
                 if t["task_id"] == active_id:
                     st = t.get("status", "")
                     if st == "submitted":
+                        # 检查是否超时（超过2分钟还没批改完，可能线程异常）
+                        submitted_at = t.get("submitted_at", "")
+                        if submitted_at:
+                            try:
+                                elapsed = (datetime.now() - datetime.fromisoformat(submitted_at)).total_seconds()
+                                if elapsed > 120:
+                                    _log(f"[QUEUE] 批改超时 {elapsed}s，强制标记为已批改")
+                                    t["status"] = "graded"
+                                    _save_learning_queue(q)
+                                    break  # 继续往下走，推下一个任务
+                            except:
+                                pass
                         send_feishu(receive_id=reply_target, msg_type="text",
                                    content="🐱 正在批改中，请稍等几秒...")
                         return True
