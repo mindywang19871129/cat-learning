@@ -441,22 +441,23 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
 
             ocr_text = "\n---\n".join(all_ocr)
 
-            # ── OCR结果校验：LLM比对题目和答案，自动修正明显错误 ──
+            # ── OCR结果校验：仅检查格式合理性，不比对标准答案（学生可能真的答错了）──
             if ocr_text and qs:
                 try:
                     validate_prompt = (
-                        "你是OCR结果校验专家。请比对原始OCR结果和题目标准答案，修正明显的手写识别错误。\n\n"
-                        "⚠️ 校验规则：\n"
-                        "1. 如果OCR结果与标准答案格式一致（如都是3位数），直接通过\n"
-                        "2. 如果OCR结果明显不符合题目要求（如结果是个位数但题目要求3位数），尝试修正\n"
-                        "3. 计算题答案：检查数字是否合理（如72×3的结果不可能是12，应该是216）\n"
-                        "4. 逐题输出修正后的答案，格式：题号|原始OCR|修正后\n"
-                        "5. 如果无法确定，保留原始OCR结果\n\n"
-                        f"题目及标准答案：\n{qs_summary}\n\n"
+                        "你是OCR手写识别校验专家。请仅修正OCR的识别错误，不要修正学生的真实答案。\n\n"
+                        "⚠️ 铁则：学生可能真的答错了，所以不能把OCR结果改成标准答案！\n"
+                        "你只能修正OCR技术层面的识别错误（如'Z1'应该是'21'，'l2'应该是'12'）\n\n"
+                        "修正规则：\n"
+                        "1. 数字/字母混淆：0↔O, 1↔l↔I, 2↔Z, 5↔S, 6↔G, 7↔1, 8↔B\n"
+                        "2. 运算符混淆：×↔x, ÷↔+, =↔-\n"
+                        "3. 如果OCR结果看起来是合理的数字答案（即使可能是错的），保留原样\n"
+                        "4. 如果无法确定，保留原始OCR结果\n"
+                        "5. 逐题输出，格式：题号|原始OCR|修正后（或'保留'）\n\n"
                         f"原始OCR结果：\n{ocr_text}\n\n"
                         "请输出修正后的答案（逐题，格式：题号|修正后答案）："
                     )
-                    validated = call_llm(validate_prompt) if call_llm else ocr_text
+                    validated = call_llm(validate_prompt)
                     if validated and len(validated) > 3 and "|" in validated:
                         _log(f"[OCR-VALIDATE] 校验修正: {validated[:100]}")
                         ocr_text = validated
