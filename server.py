@@ -425,9 +425,15 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
             # OCR所有图片
             all_ocr = []
             for img_path in img_paths:
-                ocr_result = json.loads(enhanced_ocr_image(img_path))
-                if ocr_result.get("success"):
-                    all_ocr.append(ocr_result.get("text", ""))
+                if not Path(img_path).exists():
+                    _log(f"[QUEUE] ⚠️ 图片文件不存在，跳过: {img_path}")
+                    continue
+                try:
+                    ocr_result = json.loads(enhanced_ocr_image(img_path))
+                    if ocr_result.get("success"):
+                        all_ocr.append(ocr_result.get("text", ""))
+                except Exception as e:
+                    _log(f"[QUEUE] ⚠️ OCR失败: {img_path} - {e}")
                 try:
                     Path(img_path).unlink(missing_ok=True)
                 except Exception:
@@ -592,9 +598,14 @@ def _organize_error_upload(sender_id: str, chat_id: str, reply_target: str, is_a
             session = _get_or_create_session(sender_id, chat_id)
             all_ocr = []
             for img_path in img_paths:
-                ocr_result = json.loads(enhanced_ocr_image(img_path))
-                if ocr_result.get("success"):
-                    all_ocr.append(ocr_result.get("text", ""))
+                if not Path(img_path).exists():
+                    continue
+                try:
+                    ocr_result = json.loads(enhanced_ocr_image(img_path))
+                    if ocr_result.get("success"):
+                        all_ocr.append(ocr_result.get("text", ""))
+                except Exception:
+                    pass
                 try:
                     Path(img_path).unlink(missing_ok=True)
                 except Exception:
