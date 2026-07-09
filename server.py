@@ -486,10 +486,11 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
                 f"⚠️ 自适应难度规则（root.md第9节）：\n"
                 f"- 如果基础题错了（score<50的知识点）→ 批改结果最后必须加上一行：\n"
                 f"  [NEEDS_REVIEW:{task_topic}]\n"
-                f"- 如果有1道以上错题 → 加一行：[ERROR_COUNT:{{错误的题数}}]\n\n"
+                f"- 如果有1道以上错题 → 加一行：[ERROR_COUNT:{{错误的题数}}]\n"
+                f"- 如果全部答对 → 加一行：[ALL_CORRECT]\n\n"
                 f"然后用 send_feishu(receive_id=\"{reply_target}\") 发送批改结果。\n"
-                f"批改完成后，在消息末尾加上：\n"
-                f"「回复「继续」做下一项任务，回复「任务清单」查看进度🐱」",
+                f"如果全对，在消息末尾自然地提示已自动进入下一项，不用写「回复继续」。\n"
+                f"如果有错题，在消息末尾写「回复「继续」做下一项，回复「任务清单」查看进度🐱」",
                 session,
             )
 
@@ -497,6 +498,7 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
             q2 = _load_learning_queue()
             need_review = False
             review_topic = ""
+            all_correct = False
             for t in q2.get("queue", []):
                 if t["task_id"] == task["task_id"]:
                     t["status"] = "graded"
@@ -513,8 +515,33 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
                     need_review = True
                     _log(f"[ADAPTIVE] 检测到基础概念薄弱，需要复习: {review_topic}")
 
+            # ── 检测全对，自动推下一个任务 ──
+            if result and "[ALL_CORRECT]" in str(result):
+                all_correct = True
+                _log(f"[QUEUE] 全部答对，准备自动推送下一个任务")
+
             _save_learning_queue(q2)
             _log(f"[QUEUE] 批改完成: {task['task_id']}")
+
+            # ── 全对时自动推送下一个任务 ──
+            if all_correct:
+                _log(f"[QUEUE] 全对自动推送下一个任务")
+                q3 = _load_learning_queue()
+                q3["active_task_id"] = None
+                q3["mode"] = "idle"
+                next_task = _get_next_pending_task(q3)
+                if next_task:
+                    q3["active_task_id"] = next_task["task_id"]
+                    q3["mode"] = "answering"
+                    next_task["status"] = "in_progress"
+                    _save_learning_queue(q3)
+                    _IMAGE_CACHE_META.pop(next_task["task_id"], None)
+                    _push_task_to_feishu(next_task, reply_target)
+                    _log(f"[QUEUE] 自动推送: {next_task['task_id']}")
+                else:
+                    _save_learning_queue(q3)
+                    send_feishu(receive_id=reply_target, msg_type="text",
+                               content="🐱 所有任务都完成啦！今天表现太棒了！🎉")
 
             # ── 自动生成基础复习任务 ──
             if need_review and review_topic:
