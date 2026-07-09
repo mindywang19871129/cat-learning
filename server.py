@@ -438,11 +438,14 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
             auto_hint = "\n⚠️ 这是系统自动提交的（学生超时未手动提交），请在批改结果开头说明。\n" if is_auto else ""
             task_type_hint = task.get("type", "")
             task_topic = ""
-            if task_type_hint == "math": task_topic = "数学"
+            if task_type_hint == "calc": task_topic = "计算"
+            elif task_type_hint == "math": task_topic = "数学"
+            elif task_type_hint == "geometry": task_topic = "几何"
             elif task_type_hint == "vocab": task_topic = "KET词汇"
             elif task_type_hint == "grammar": task_topic = "英语语法"
             elif task_type_hint == "writing": task_topic = "英语写作"
-            elif task_type_hint in ("geometry", "calc"): task_topic = "几何" if task_type_hint == "geometry" else "计算"
+            elif task_type_hint == "english": task_topic = "英语"
+            elif task_type_hint == "review": task_topic = "基础复习"
             
             result = run(
                 f"[系统上下文：飞书用户 sender_open_id={sender_id}, 回复目标ID={reply_target}]\n"
@@ -697,7 +700,7 @@ def _handle_queue_command(text: str, sender_id: str, chat_id: str, reply_target:
                        content="🐱 当前没有学习任务记录。")
             return True
         
-        emoji_map = {"calc": "🔢", "math": "📐", "geometry": "📏", "vocab": "📚", "english": "📖", "error_review": "📝"}
+        emoji_map = {"calc": "🔢", "math": "📐", "geometry": "📏", "vocab": "📚", "grammar": "📖", "writing": "✏️", "english": "📝", "error_review": "🔄", "review": "💡"}
         status_map = {"pending": "❌ 未开始", "in_progress": "⏳ 进行中", "image_received": "📷 已收到图片",
                       "submitted": "⏳ 待批改", "graded": "✅ 已完成", "skipped": "⏭️ 已跳过"}
         
