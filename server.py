@@ -760,14 +760,20 @@ def _handle_queue_command(text: str, sender_id: str, chat_id: str, reply_target:
     # ── 继续 ──
     if text_clean == "继续":
         q = _load_learning_queue()
-        # 先检查当前任务是否已批改
         active_id = q.get("active_task_id")
         if active_id:
             for t in q.get("queue", []):
-                if t["task_id"] == active_id and t.get("status") not in ("graded",):
-                    send_feishu(receive_id=reply_target, msg_type="text",
-                               content=f"🐱 当前任务 {active_id} 还没批改完哦～请先回复「提交」")
-                    return True
+                if t["task_id"] == active_id:
+                    st = t.get("status", "")
+                    if st == "submitted":
+                        send_feishu(receive_id=reply_target, msg_type="text",
+                                   content="🐱 正在批改中，请稍等几秒...")
+                        return True
+                    if st == "in_progress":
+                        send_feishu(receive_id=reply_target, msg_type="text",
+                                   content=f"🐱 当前任务 {active_id} 正在进行中，请完成后说「提交」")
+                        return True
+                    break
         
         # 找下一个待处理任务
         task = _get_next_pending_task(q)
