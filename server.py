@@ -454,7 +454,7 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
                 f"⚠️ 自适应难度规则（root.md第9节）：\n"
                 f"- 如果基础题错了（score<50的知识点）→ 批改结果最后必须加上一行：\n"
                 f"  [NEEDS_REVIEW:{task_topic}]\n"
-                f"- 如果有1道以上错题 → 加一行：[ERROR_COUNT:{错误的题数}]\n\n"
+                f"- 如果有1道以上错题 → 加一行：[ERROR_COUNT:{{错误的题数}}]\n\n"
                 f"然后用 send_feishu(receive_id=\"{reply_target}\") 发送批改结果。\n"
                 f"批改完成后，在消息末尾加上：\n"
                 f"「回复「继续」做下一项任务，回复「任务清单」查看进度🐱」",
