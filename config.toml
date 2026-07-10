@@ -27,10 +27,6 @@ exam_questions_count = 25      # 模考题数
 
 # 出题时间
 push_time = "09:00"
-friday_3days = false           # 已停用：每天正常出题，前一天未批改则跳过
-
-# 课程起始日
-course_start_date = "2026-05-14"
 
 # 难度偏差: easy / normal / hard
 difficulty_bias = "hard"
@@ -50,6 +46,47 @@ critical = 0          # < 50 严重不足
 perfect = 5           # 全对 +5
 partial = 1           # 部分对 +1
 wrong = -10           # 全错 -10
+
+# ── 学期时间表（自动切换模式）──
+[[education.semesters]]
+name = "三下"
+start_date = "2026-05-14"
+end_date = "2026-06-30"
+mode = "normal"
+grade = "三年级下册"
+knowledge_map = "data/knowledge_map.json"
+
+[[education.semesters]]
+name = "暑假"
+start_date = "2026-07-01"
+end_date = "2026-08-31"
+mode = "summer"
+grade = "三下→四上（衔接+KET备考）"
+knowledge_map = "data/knowledge_map_4th.json"
+
+[[education.semesters]]
+name = "四上"
+start_date = "2026-09-01"
+end_date = "2027-01-15"
+mode = "normal"
+grade = "四年级上册"
+knowledge_map = "data/knowledge_map_4th.json"
+
+[[education.semesters]]
+name = "寒假"
+start_date = "2027-01-16"
+end_date = "2027-02-28"
+mode = "summer"
+grade = "四上→四下（衔接）"
+knowledge_map = "data/knowledge_map_4th.json"
+
+[[education.semesters]]
+name = "四下"
+start_date = "2027-03-01"
+end_date = "2027-06-30"
+mode = "normal"
+grade = "四年级下册"
+knowledge_map = "data/knowledge_map_4th.json"
 
 [feishu]
 # 飞书API基础URL
@@ -71,18 +108,10 @@ interval_seconds = 10
 # ocr.space 为备用（免费25000次/月），需在 https://ocr.space/ocrapi 注册获取API Key
 # API Key 配置在 .env 文件的 OCR_SPACE_API_KEY 字段
 
-# ── 每日学习任务配置 ──
-# 按 priority 从小到大依次推送，孩子完成一个才能做下一个
-# type: 任务类型标识
-# priority: 推送优先级（数字越小越先推送）
-# title: 飞书推送时显示的任务标题
-# question_count: 题目数量
-# prompt_file: LLM 出题提示词文件（相对于项目根目录）
-# prefix: 试卷编号前缀（C=计算, V=词汇, G=语法, P=作文, T=数学, E=几何）
-# difficulty: 默认难度（basic/normal/hard）
-# output_file: 题目存储文件名模板（{today_str} 会被替换为当天日期）
-
-[[tasks]]
+# ═══════════════════════════════════════
+# 正常模式（三下/四上/四下）
+# ═══════════════════════════════════════
+[[tasks.normal]]
 type = "calc"
 priority = 1
 title = "🔢 计算热身"
@@ -92,7 +121,7 @@ prefix = "C"
 difficulty = "normal"
 output_file = "data/questions/questions_{today_str}_calc.json"
 
-[[tasks]]
+[[tasks.normal]]
 type = "vocab"
 priority = 2
 title = "📚 KET词汇"
@@ -102,7 +131,7 @@ prefix = "V"
 difficulty = "normal"
 output_file = "data/questions/questions_{today_str}_vocab.json"
 
-[[tasks]]
+[[tasks.normal]]
 type = "grammar"
 priority = 3
 title = "📖 英语语法"
@@ -112,7 +141,7 @@ prefix = "G"
 difficulty = "normal"
 output_file = "data/questions/questions_{today_str}_grammar.json"
 
-[[tasks]]
+[[tasks.normal]]
 type = "writing"
 priority = 4
 title = "✏️ 英语作文"
@@ -122,7 +151,7 @@ prefix = "P"
 difficulty = "normal"
 output_file = "data/questions/questions_{today_str}_writing.json"
 
-[[tasks]]
+[[tasks.normal]]
 type = "math"
 priority = 5
 title = "📐 数学综合"
@@ -132,7 +161,7 @@ prefix = "T"
 difficulty = "hard"
 output_file = "data/questions/questions_{today_str}.json"
 
-[[tasks]]
+[[tasks.normal]]
 type = "geometry"
 priority = 6
 title = "📏 几何强化"
@@ -141,6 +170,69 @@ prompt_file = "prompts/geometry.md"
 prefix = "E"
 difficulty = "hard"
 output_file = "data/questions/questions_{today_str}_geometry.json"
+
+# ═══════════════════════════════════════
+# 暑假模式（衔接+KET备考）
+# ═══════════════════════════════════════
+[[tasks.summer]]
+type = "calc"
+priority = 1
+title = "🔢 计算热身"
+question_count = 6
+prompt_file = "prompts/calc.md"
+prefix = "C"
+difficulty = "normal"
+output_file = "data/questions/questions_{today_str}_calc.json"
+
+[[tasks.summer]]
+type = "math_preview"
+priority = 2
+title = "📖 数学新概念"
+question_count = 0
+prompt_file = "prompts/math_preview.md"
+prefix = "M"
+difficulty = "basic"
+output_file = "data/questions/questions_{today_str}_math_preview.json"
+
+[[tasks.summer]]
+type = "math_practice"
+priority = 3
+title = "📝 数学练习"
+question_count = 3
+prompt_file = "prompts/math_practice.md"
+prefix = "N"
+difficulty = "basic"
+output_file = "data/questions/questions_{today_str}_math_practice.json"
+
+[[tasks.summer]]
+type = "ket_reading"
+priority = 4
+title = "📖 KET阅读"
+question_count = 6
+prompt_file = "prompts/ket_reading.md"
+prefix = "K"
+difficulty = "normal"
+output_file = "data/questions/questions_{today_str}_ket_reading.json"
+
+[[tasks.summer]]
+type = "ket_writing"
+priority = 5
+title = "✏️ KET写作"
+question_count = 1
+prompt_file = "prompts/ket_writing.md"
+prefix = "W"
+difficulty = "normal"
+output_file = "data/questions/questions_{today_str}_ket_writing.json"
+
+[[tasks.summer]]
+type = "geometry_preview"
+priority = 6
+title = "📏 几何探索"
+question_count = 2
+prompt_file = "prompts/geometry_preview.md"
+prefix = "G"
+difficulty = "basic"
+output_file = "data/questions/questions_{today_str}_geometry_preview.json"
 
 [exam]
 # 模考配置

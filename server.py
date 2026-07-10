@@ -124,11 +124,25 @@ _AUTO_SUBMIT_TIMEOUT_LEARNING = 300   # 孩子答案图片：5分钟
 _AUTO_SUBMIT_TIMEOUT_ERROR = 600      # 家长错题图片：10分钟
 _AUTO_SUBMIT_SCAN_INTERVAL = 60       # 扫描间隔：60秒
 
+# ── 自动学期检测 ──
+def _get_current_semester() -> dict:
+    """根据当前日期自动匹配学期配置，返回 {name, mode, grade, knowledge_map}。"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    semesters = CFG.get("education", {}).get("semesters", [])
+    for s in semesters:
+        if s.get("start_date", "") <= today <= s.get("end_date", ""):
+            return s
+    # 默认返回正常模式
+    return {"name": "默认", "mode": "normal", "grade": "三年级下册", "knowledge_map": "data/knowledge_map.json"}
+
 # 任务类型优先级（数字越小越优先）
-# 从 config.toml [[tasks]] 构建优先级和标题映射
+# 从 config.toml [[tasks.normal]] 和 [[tasks.summer]] 构建
 _TASK_PRIORITY = {}
 _TASK_TITLES = {}
-for _t in CFG.get("tasks", []):
+_semester = _get_current_semester()
+_mode = _semester.get("mode", "normal")
+_tasks_cfg = CFG.get("tasks", {}).get(_mode, CFG.get("tasks", []))
+for _t in _tasks_cfg:
     _TASK_PRIORITY[_t["type"]] = _t.get("priority", 99)
     _TASK_TITLES[_t["type"]] = _t.get("title", _t["type"])
 # 补充非每日任务类型
@@ -320,21 +334,47 @@ def _push_task_to_feishu(task: dict, reply_target: str):
         task_type = task.get("type", "")
         
         # 不同任务类型的问题提取
-        if task_type == "writing":
+        if task_type == "math_preview":
+            # 概念讲解任务：0题，展示讲解内容
+            intro = data.get("introduction", "")
+            unit = data.get("unit", "")
+            topic = data.get("topic", "")
+            lines = [
+                f"💡 {task['title']} 任务",
+                f"试卷编号：{task['task_id']}",
+                f"单元：{unit}",
+                f"知识点：{topic}",
+                "",
+                f"📖 概念讲解：",
+                intro,
+                "",
+                "📝 请认真阅读上面的概念讲解，理解后回复「继续」开始做练习。",
+                "🐱 加油！"
+            ]
+            send_feishu(receive_id=reply_target, msg_type="text", content="\n".join(lines))
+            _log(f"[QUEUE] 推送概念讲解任务 {task['task_id']} 到 {reply_target[:16]}...")
+            return
+        elif task_type == "ket_writing":
+            qs = [{"id": "W1", "question": data.get("prompt", "")}]
+            scoring = data.get("expected_points", [])
+            ket_part = data.get("ket_part", "")
+        elif task_type == "writing":
             qs = [{"id": "W1", "question": data.get("prompt", "")}]
             scoring = data.get("scoring_points", [])
         else:
             qs = data.get("questions", data.get("math", []) + data.get("english", []) + data.get("vocab", []))
             scoring = []
         
-        emoji_map = {"calc": "🔢", "math": "📐", "geometry": "📏", "vocab": "📚", "grammar": "📖", "writing": "✏️", "english": "📝", "error_review": "🔄", "review": "💡"}
+        emoji_map = {"calc": "🔢", "math": "📐", "geometry": "📏", "vocab": "📚", "grammar": "📖", "writing": "✏️", "english": "📝", "error_review": "🔄", "review": "💡", "math_preview": "📖", "math_practice": "📝", "ket_reading": "📖", "ket_writing": "✏️", "geometry_preview": "📏"}
         emoji = emoji_map.get(task_type, "📋")
         
         diff_map = {"basic": "（基础）", "normal": "", "hard": "（提升）", "advanced": "（拓展）"}
         diff_hint = diff_map.get(task.get("difficulty", ""), "")
         
         lines = [f"{emoji} {task['title']}{diff_hint} 任务", f"试卷编号：{task['task_id']}"]
-        if task_type != "writing":
+        if task_type == "ket_writing":
+            lines.append(f"KET Part: {ket_part}")
+        if task_type not in ("writing", "ket_writing"):
             lines.append(f"题目数量：{len(qs)}题")
         lines.append("")
         for i, q in enumerate(qs, 1):
@@ -349,9 +389,12 @@ def _push_task_to_feishu(task: dict, reply_target: str):
                 lines.append(f"  • {sp}")
         
         lines.append("")
-        if task_type == "geometry":
+        if task_type in ("geometry", "geometry_preview"):
             lines.append("⚠️ 几何题配有图形，请查看飞书消息中的图片。")
-        lines.append("请在纸上写下答案，拍照后直接发给我。")
+        if task_type == "ket_writing":
+            lines.append("请在纸上写下作文，拍照后直接发给我。")
+        else:
+            lines.append("请在纸上写下答案，拍照后直接发给我。")
         lines.append("发完所有图片后回复「提交」开始批改。")
         lines.append("🐱 加油！")
         
@@ -475,6 +518,11 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
             elif task_type_hint == "writing": task_topic = "英语写作"
             elif task_type_hint == "english": task_topic = "英语"
             elif task_type_hint == "review": task_topic = "基础复习"
+            elif task_type_hint == "math_preview": task_topic = "数学新概念"
+            elif task_type_hint == "math_practice": task_topic = "数学练习"
+            elif task_type_hint == "ket_reading": task_topic = "KET阅读"
+            elif task_type_hint == "ket_writing": task_topic = "KET写作"
+            elif task_type_hint == "geometry_preview": task_topic = "几何探索"
             
             result = run(
                 f"[系统上下文：飞书用户 sender_open_id={sender_id}, 回复目标ID={reply_target}]\n"
@@ -824,7 +872,7 @@ def _handle_queue_command(text: str, sender_id: str, chat_id: str, reply_target:
                        content="🐱 当前没有学习任务记录。")
             return True
         
-        emoji_map = {"calc": "🔢", "math": "📐", "geometry": "📏", "vocab": "📚", "grammar": "📖", "writing": "✏️", "english": "📝", "error_review": "🔄", "review": "💡"}
+        emoji_map = {"calc": "🔢", "math": "📐", "geometry": "📏", "vocab": "📚", "grammar": "📖", "writing": "✏️", "english": "📝", "error_review": "🔄", "review": "💡", "math_preview": "📖", "math_practice": "📝", "ket_reading": "📖", "ket_writing": "✏️", "geometry_preview": "📏"}
         status_map = {"pending": "❌ 未开始", "in_progress": "⏳ 进行中", "image_received": "📷 已收到图片",
                       "submitted": "⏳ 待批改", "graded": "✅ 已完成", "skipped": "⏭️ 已跳过"}
         
@@ -997,6 +1045,15 @@ def _handle_queue_command(text: str, sender_id: str, chat_id: str, reply_target:
                    content=f"🐱 错题复习任务已生成（{review_test_id}），回复「继续」开始订正！")
         return True
 
+    # ── 当前模式 ──
+    if text_clean in ("当前模式", "查看模式", "什么模式"):
+        semester = _get_current_semester()
+        mode = semester.get("mode", "normal")
+        emoji = "🏖️" if mode == "summer" else "📚"
+        send_feishu(receive_id=reply_target, msg_type="text",
+                   content=f"{emoji} 当前模式：{semester.get('name','?')}\n年级：{semester.get('grade','?')}\n模式：{mode}\n到期：{semester.get('end_date','?')}\n知识库：{semester.get('knowledge_map','?')}")
+        return True
+
     # ── 整理（错题）──
     if text_clean == "整理":
         return _organize_error_upload(sender_id, chat_id, reply_target, is_auto=False)
@@ -1134,6 +1191,18 @@ def _can_scheduled_push_today():
     返回 (can_push: bool, reason: str)
     """
     today_str = datetime.now().strftime("%Y-%m-%d")
+
+    # ── 暑假模式：隔天推送（周3-4次）──
+    semester = _get_current_semester()
+    if semester.get("mode") == "summer":
+        last_push_file = DATA_DIR / ".last_push_date"
+        if last_push_file.exists():
+            last_date = last_push_file.read_text().strip()
+            if last_date == today_str:
+                return False, "暑假模式，今天已推送过"
+            last_dt = datetime.strptime(last_date, "%Y-%m-%d")
+            if (datetime.now() - last_dt).days < 2:
+                return False, "暑假模式隔天推送，明天再来"
 
     # ── 检查学习队列：有未完成任务就不出新题 ──
     q = _load_learning_queue()
@@ -1772,10 +1841,12 @@ def _log(msg: str):
 _SCHEDULED_PUSH_LOCK = threading.Lock()
 
 def scheduled_daily_push():
-    """定时每日推送：从 config.toml [[tasks]] 读取任务配置，逐个生成，全部入队列，只推送第一个。"""
+    """定时每日推送：根据当前学期自动选择 tasks.normal 或 tasks.summer，逐个生成，全部入队列，只推送第一个。"""
     if not _SCHEDULED_PUSH_LOCK.acquire(blocking=False):
         _log("[SCHEDULER] ⛔ 已有推送任务正在执行，跳过重复调用")
         return
+    _saved_send_feishu = None
+    _saved_schema = None
     try:
         _log(f"[SCHEDULER] ====== 开始执行每日推送 ======")
         _log(f"[SCHEDULER] 时间: {datetime.now()}")
@@ -1792,14 +1863,18 @@ def scheduled_daily_push():
             return
 
         today_str = datetime.now().strftime('%Y-%m-%d')
-        tasks_cfg = CFG.get("tasks", [])
+        semester = _get_current_semester()
+        mode = semester.get("mode", "normal")
+        _log(f"[SCHEDULER] 当前学期: {semester.get('name')}, 模式: {mode}, 年级: {semester.get('grade')}")
+
+        # 按模式选任务配置
+        tasks_cfg = CFG.get("tasks", {}).get(mode, CFG.get("tasks", []))
         if not tasks_cfg:
-            _log("[SCHEDULER] ⛔ config.toml 中未配置 [[tasks]]，跳过")
+            _log(f"[SCHEDULER] ⛔ config.toml 中未配置 tasks.{mode}，跳过")
             return
 
         # 临时从工具列表中移除 send_feishu，LLM 根本调不到
         _saved_send_feishu = _core_mod.TOOLS.pop("send_feishu", None)
-        _saved_schema = None
         for i, s in enumerate(_core_mod.TOOL_SCHEMAS):
             if s.get("function", {}).get("name") == "send_feishu":
                 _saved_schema = _core_mod.TOOL_SCHEMAS.pop(i)
@@ -1811,18 +1886,25 @@ def scheduled_daily_push():
             prefix = task_cfg.get("prefix", "X")
             test_ids[task_cfg["type"]] = _gen_test_id(prefix)
 
-        # 一次 LLM 调用生成所有任务
-        combined_prompt = (HOME / "prompts" / "daily_all.md").read_text(encoding="utf-8")
+        # 按模式选择合并提示词
+        if mode == "summer":
+            prompt_file = "prompts/daily_all_summer.md"
+        else:
+            prompt_file = "prompts/daily_all.md"
+        combined_prompt = (HOME / prompt_file).read_text(encoding="utf-8")
         prompt = combined_prompt.format(
             today_str=today_str,
             test_id_c=test_ids.get("calc", ""),
             test_id_v=test_ids.get("vocab", ""),
             test_id_g=test_ids.get("grammar", ""),
             test_id_p=test_ids.get("writing", ""),
-            test_id_m=test_ids.get("math", ""),
-            test_id_geo=test_ids.get("geometry", ""),
+            test_id_m=test_ids.get("math_preview", test_ids.get("math", "")),
+            test_id_n=test_ids.get("math_practice", ""),
+            test_id_k=test_ids.get("ket_reading", ""),
+            test_id_w=test_ids.get("ket_writing", ""),
+            test_id_geo=test_ids.get("geometry_preview", test_ids.get("geometry", "")),
         )
-        _log(f"[SCHEDULER] 开始一次性生成全部 {len(tasks_cfg)} 个任务...")
+        _log(f"[SCHEDULER] 开始一次性生成全部 {len(tasks_cfg)} 个任务 (模式:{mode})...")
         session = init_new_session()
         run(prompt, session)
         _log(f"[SCHEDULER] LLM 出题完成")
@@ -1841,6 +1923,8 @@ def scheduled_daily_push():
             _core_mod.TOOL_SCHEMAS.append(_saved_schema)
 
         _push_first_pending_to_all()
+        # 记录推送日期（暑假隔天用）
+        (DATA_DIR / ".last_push_date").write_text(today_str)
         _log(f"[SCHEDULER] ====== 每日推送完成，共 {len(tasks_cfg)} 个任务 ======")
     except Exception as e:
         if _saved_send_feishu:
