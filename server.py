@@ -1845,8 +1845,87 @@ def _log(msg: str):
 
 _SCHEDULED_PUSH_LOCK = threading.Lock()
 
+def scheduled_pre_generate():
+    """凌晨预生成：队列为空时提前出好题，用户无感知。"""
+    if not _SCHEDULED_PUSH_LOCK.acquire(blocking=False):
+        _log("[SCHEDULER] ⛔ 预生成：已有推送任务正在执行，跳过")
+        return
+    try:
+        q = _load_learning_queue()
+        pending = [t for t in q.get("queue", []) if t.get("status") in ("pending", "in_progress", "image_received", "submitted")]
+        if pending:
+            _log(f"[SCHEDULER] 预生成：队列有 {len(pending)} 个未完成任务，复用现有任务")
+            return
+
+        _log(f"[SCHEDULER] ====== 开始预生成今日任务 ======")
+        _log(f"[SCHEDULER] 时间: {datetime.now()}")
+
+        poll_cfg = CFG.get("feishu", {}).get("poll", {})
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        semester = _get_current_semester()
+        mode = semester.get("mode", "normal")
+        tasks_cfg = CFG.get("tasks", {}).get(mode, CFG.get("tasks", []))
+        if not tasks_cfg:
+            _log("[SCHEDULER] 预生成：未配置任务，跳过")
+            return
+
+        # 临时移除 send_feishu
+        _saved_send_feishu = _core_mod.TOOLS.pop("send_feishu", None)
+        _saved_schema = None
+        for i, s in enumerate(_core_mod.TOOL_SCHEMAS):
+            if s.get("function", {}).get("name") == "send_feishu":
+                _saved_schema = _core_mod.TOOL_SCHEMAS.pop(i)
+                break
+
+        # 生成 test_id
+        test_ids = {}
+        for task_cfg in sorted(tasks_cfg, key=lambda t: t.get("priority", 99)):
+            prefix = task_cfg.get("prefix", "X")
+            test_ids[task_cfg["type"]] = _gen_test_id(prefix)
+
+        # 出题
+        prompt_file = "prompts/daily_all_summer.md" if mode == "summer" else "prompts/daily_all.md"
+        combined_prompt = (HOME / prompt_file).read_text(encoding="utf-8")
+        prompt = combined_prompt.format(
+            today_str=today_str,
+            test_id_c=test_ids.get("calc", ""),
+            test_id_v=test_ids.get("vocab", ""),
+            test_id_g=test_ids.get("grammar", ""),
+            test_id_p=test_ids.get("writing", ""),
+            test_id_m=test_ids.get("math_preview", test_ids.get("math", "")),
+            test_id_n=test_ids.get("math_practice", ""),
+            test_id_k=test_ids.get("ket_reading", ""),
+            test_id_w=test_ids.get("ket_writing", ""),
+            test_id_geo=test_ids.get("geometry_preview", test_ids.get("geometry", "")),
+        )
+        _log(f"[SCHEDULER] 预生成：开始生成 {len(tasks_cfg)} 个任务 (模式:{mode})...")
+        session = init_new_session()
+        run(prompt, session)
+        _log(f"[SCHEDULER] 预生成：LLM 出题完成")
+
+        # 加入队列
+        for task_cfg in sorted(tasks_cfg, key=lambda t: t.get("priority", 99)):
+            ttype = task_cfg["type"]
+            test_id = test_ids.get(ttype, "")
+            output_file = task_cfg.get("output_file", "").replace("{today_str}", today_str)
+            _add_task_to_queue(test_id, today_str, ttype, str(DATA_DIR / output_file.replace("data/", "")))
+
+        # 恢复 send_feishu
+        if _saved_send_feishu:
+            _core_mod.TOOLS["send_feishu"] = _saved_send_feishu
+        if _saved_schema:
+            _core_mod.TOOL_SCHEMAS.append(_saved_schema)
+
+        _log(f"[SCHEDULER] ====== 预生成完成，共 {len(tasks_cfg)} 个任务已加入队列 ======")
+    except Exception as e:
+        _log(f"[SCHEDULER] 预生成失败: {e}")
+        _log(traceback.format_exc())
+    finally:
+        _SCHEDULED_PUSH_LOCK.release()
+
+
 def scheduled_daily_push(is_manual: bool = False):
-    """定时每日推送：根据当前学期自动选择 tasks.normal 或 tasks.summer，逐个生成，全部入队列，只推送第一个。
+    """定时每日推送：先检查队列是否有预生成的任务，有则直接推送，无则生成。
     is_manual=True 表示手动触发（跳过暑假隔天检查）。"""
     if not _SCHEDULED_PUSH_LOCK.acquire(blocking=False):
         _log("[SCHEDULER] ⛔ 已有推送任务正在执行，跳过重复调用")
@@ -1877,6 +1956,16 @@ def scheduled_daily_push(is_manual: bool = False):
         tasks_cfg = CFG.get("tasks", {}).get(mode, CFG.get("tasks", []))
         if not tasks_cfg:
             _log(f"[SCHEDULER] ⛔ config.toml 中未配置 tasks.{mode}，跳过")
+            return
+
+        # ── 检查队列是否已有预生成的任务 ──
+        q = _load_learning_queue()
+        pending = [t for t in q.get("queue", []) if t.get("status") in ("pending", "in_progress", "image_received", "submitted")]
+        if pending:
+            _log(f"[SCHEDULER] 队列已有 {len(pending)} 个预生成任务，直接推送")
+            _push_first_pending_to_all()
+            (DATA_DIR / ".last_push_date").write_text(today_str)
+            _log(f"[SCHEDULER] ====== 每日推送完成（复用预生成），共 {len(pending)} 个任务 ======")
             return
 
         # 临时从工具列表中移除 send_feishu，LLM 根本调不到
@@ -2088,6 +2177,11 @@ def start_scheduler():
     push_time = CFG.get("education", {}).get("push_time", "09:00")
     hour, minute = map(int, push_time.split(":"))
     scheduler = BackgroundScheduler()
+    
+    # 凌晨5点预生成（用户无感知）
+    scheduler.add_job(scheduled_pre_generate, 'cron', hour=5, minute=0, id='pre_generate')
+    
+    # 09:00 定时推送（直接读预生成的任务，秒推）
     scheduler.add_job(scheduled_daily_push, 'cron', hour=hour, minute=minute, id='daily_push')
     
     # 每周日综合测试
@@ -2107,7 +2201,7 @@ def start_scheduler():
         print(f"[POLL] 飞书消息轮询已启动，间隔 {interval}s，监控 {len(poll_cfg['chat_ids'])} 个聊天")
     
     scheduler.start()
-    print(f"[SCHEDULER] 已启动，每日 {push_time} 推送（含综合+词汇+计算）+ 周日综合测试 + 图片清理")
+    print(f"[SCHEDULER] 已启动，05:00预生成 + 每日 {push_time} 推送 + 周日综合测试 + 图片清理")
 
 
 # ══════════════════════════════════════════════════════════════════════
