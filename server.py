@@ -452,6 +452,13 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
     task["submitted_at"] = datetime.now().isoformat()
     _save_learning_queue(q)
 
+    # 提示用户正在批改
+    send_feishu(receive_id=reply_target, msg_type="text",
+               content="🐱 收到你的答案啦！正在批改中...\n\n"
+                       "📷 正在识别手写内容...\n"
+                       "🔍 正在逐题批改...\n"
+                       "⏳ 批改完成后会自动回复，请稍等～")
+
     # 异步批改
     def _grade_task():
         try:
@@ -783,13 +790,16 @@ def _handle_queue_command(text: str, sender_id: str, chat_id: str, reply_target:
     text_clean = text.strip().replace(" ", "").replace("\u3000", "")  # 去空格，兼容"出今日 任务"
     
     # ── 开始学习 ──
-    if text_clean in ("开始学习", "开始"):
+    if text_clean in ("开始学习", "开始", "开始出题", "出题", "生成任务"):
         q = _migrate_old_tasks_to_queue()
         task = _get_next_pending_task(q)
         if not task:
             # 队列为空，自动触发每日出题
             send_feishu(receive_id=reply_target, msg_type="text",
-                       content="🐱 当前没有待完成的学习任务，正在为你生成今日任务，请稍等...")
+                       content="🐱 正在为你生成今日学习任务...\n\n"
+                               "📖 正在读取知识库和错题记录...\n"
+                               "✍️ 正在出题中（这可能需要1-2分钟）...\n"
+                               "⏳ 出题完成后会自动推送第一个任务，请稍等～")
             threading.Thread(target=scheduled_daily_push, daemon=True).start()
             return True
         
@@ -1081,12 +1091,6 @@ def _handle_queue_command(text: str, sender_id: str, chat_id: str, reply_target:
         return True
 
     # ── 手动触发今日学习任务 ──
-    if text_clean in ("今日学习", "出今日任务", "生成今日任务"):
-        send_feishu(receive_id=reply_target, msg_type="text",
-                   content="🐱 正在生成今日学习任务，请稍等...")
-        threading.Thread(target=scheduled_daily_push, daemon=True).start()
-        return True
-    
     return False
 
 # ── 试卷编号生成（跨重启持久化）──
@@ -1921,6 +1925,11 @@ def scheduled_daily_push():
             _core_mod.TOOLS["send_feishu"] = _saved_send_feishu
         if _saved_schema:
             _core_mod.TOOL_SCHEMAS.append(_saved_schema)
+
+        # 推送通知：出题完成
+        for chat_id in poll_cfg.get("chat_ids", []):
+            send_feishu(receive_id=chat_id, msg_type="text",
+                       content=f"✅ 今日学习任务已生成（{len(tasks_cfg)}项），正在推送第一个任务...")
 
         _push_first_pending_to_all()
         # 记录推送日期（暑假隔天用）
