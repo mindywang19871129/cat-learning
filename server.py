@@ -894,15 +894,23 @@ def _handle_queue_command(text: str, sender_id: str, chat_id: str, reply_target:
     
     return False
 
-# ── 试卷编号生成 ──
-_test_id_counter = {}  # 按日期+前缀计数，防止重复
+# ── 试卷编号生成（跨重启持久化）──
+_TEST_ID_COUNTER_FILE = DATA_DIR / ".test_id_counter"
 
 def _gen_test_id(prefix="T"):
-    """生成唯一试卷编号，如 T0609A、V0609B。同一天同前缀不会重复。"""
+    """生成唯一试卷编号，如 T0609A、V0609B。跨服务器重启不重复。"""
     today = datetime.now().strftime("%m%d")
     key = f"{prefix}{today}"
-    count = _test_id_counter.get(key, 0)
-    _test_id_counter[key] = count + 1
+    # 从持久化文件读取计数器
+    counter = {}
+    if _TEST_ID_COUNTER_FILE.exists():
+        try:
+            counter = json.loads(_TEST_ID_COUNTER_FILE.read_text())
+        except:
+            counter = {}
+    count = counter.get(key, 0)
+    counter[key] = count + 1
+    _TEST_ID_COUNTER_FILE.write_text(json.dumps(counter))
     if count < 26:
         suffix = chr(ord('A') + count)
     else:
