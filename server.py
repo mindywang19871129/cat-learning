@@ -506,12 +506,12 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
                     t["image_paths"] = []
                     break
             
-            # ── 自适应难度：检测是否需要基础复习 ──
-            if result and "[NEEDS_REVIEW:" in result:
+            # ── 自适应难度：检测是否需要基础复习（仅非复习任务触发）──
+            if result and "[NEEDS_REVIEW:" in result and task.get("type") != "review":
                 import re
                 m = re.search(r'\[NEEDS_REVIEW:([^\]]+)\]', str(result))
                 if m:
-                    review_topic = m.group(1).strip()
+                    review_topic = m.group(1).strip() or "基础概念"
                     need_review = True
                     _log(f"[ADAPTIVE] 检测到基础概念薄弱，需要复习: {review_topic}")
 
@@ -523,12 +523,15 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
             _save_learning_queue(q2)
             _log(f"[QUEUE] 批改完成: {task['task_id']}")
 
+            # ── 批改完成，清理活跃任务标记 ──
+            q2["active_task_id"] = None
+            q2["mode"] = "idle"
+            _save_learning_queue(q2)
+
             # ── 全对时自动推送下一个任务 ──
             if all_correct:
                 _log(f"[QUEUE] 全对自动推送下一个任务")
                 q3 = _load_learning_queue()
-                q3["active_task_id"] = None
-                q3["mode"] = "idle"
                 next_task = _get_next_pending_task(q3)
                 if next_task:
                     q3["active_task_id"] = next_task["task_id"]
@@ -785,6 +788,11 @@ def _handle_queue_command(text: str, sender_id: str, chat_id: str, reply_target:
                         send_feishu(receive_id=reply_target, msg_type="text",
                                    content=f"🐱 当前任务 {active_id} 正在进行中，请完成后说「提交」")
                         return True
+                    if st == "graded":
+                        # 已批改完成，清理状态继续推下一个任务
+                        q["active_task_id"] = None
+                        q["mode"] = "idle"
+                        _save_learning_queue(q)
                     break
         
         # 找下一个待处理任务
