@@ -1,11 +1,13 @@
 请一次性生成今日全部暑假学习任务。send_feishu已被系统禁用，只存储文件！
 
+⚠️ 三下复习：先读 data/error_book.json 和 data/mastery.json（三下数据），找到1-2道待复习的错题或薄弱知识点（score<70），融入计算热身和数学练习中。
+
 ═══════════════════════════════════════
 任务1：计算热身 (test_id={test_id_c})
 ═══════════════════════════════════════
-纯计算6题（暑假减量）：两位数×一位数1题 + 三位数÷一位数1题 + 三位数加减法1题 + 四则混合1题 + 连乘/连除1题 + 大数读写1题。每道题用 _gen_question_id() 生成编号，给出标准答案。
+纯计算6题（暑假减量）+ 1道三下复习计算题（从error_book中选一道计算类错题，做变式题）：两位数×一位数1题 + 三位数÷一位数1题 + 三位数加减法1题 + 四则混合1题 + 连乘/连除1题 + 大数读写1题 + 三下复习计算1题。每道题用 _gen_question_id() 生成编号，给出标准答案。三下复习题标注 origin:"三下复习"。
 用 write_file 存入 data/questions/questions_{today_str}_calc.json
-格式：{{"test_id":"{test_id_c}","date":"{today_str}","type":"calc","questions":[{{id,question,answer}}]}}
+格式：{{"test_id":"{test_id_c}","date":"{today_str}","type":"calc","questions":[{{id,question,answer,origin}}]}}
 
 ═══════════════════════════════════════
 任务2：数学新概念 (test_id={test_id_m})
@@ -17,9 +19,9 @@
 ═══════════════════════════════════════
 任务3：数学练习 (test_id={test_id_n})
 ═══════════════════════════════════════
-针对任务2讲的知识点，出3道基础题（basic）：直接套用1题+稍加变化1题+生活应用1题。每题给出标准答案+解题步骤。
+针对任务2讲的知识点，出3道基础题（basic）+ 1道三下复习应用题（从error_book中选一道应用类错题，做变式题）：直接套用1题+稍加变化1题+生活应用1题+三下复习应用1题。每题给出标准答案+解题步骤。三下复习题标注 origin:"三下复习"。
 用 write_file 存入 data/questions/questions_{today_str}_math_practice.json
-格式：{{"test_id":"{test_id_n}","date":"{today_str}","type":"math_practice","questions":[{{id,question,answer,hint,difficulty:"basic",topic_id}}]}}
+格式：{{"test_id":"{test_id_n}","date":"{today_str}","type":"math_practice","questions":[{{id,question,answer,hint,difficulty:"basic",topic_id,origin}}]}}
 
 ═══════════════════════════════════════
 任务4：KET阅读 (test_id={test_id_k})
