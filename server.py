@@ -859,6 +859,117 @@ def _handle_queue_command(text: str, sender_id: str, chat_id: str, reply_target:
                    content="📝 已进入学校错题整理模式\n\n请连续发送学校错题图片。\n发完后回复「整理」开始分析。")
         return True
     
+    # ── 查看错题 ──
+    if text_clean in ("查看错题", "错题本"):
+        error_file = DATA_DIR / "error_book.json"
+        if not error_file.exists():
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content="🐱 错题本是空的，继续保持！")
+            return True
+        try:
+            errors = json.loads(error_file.read_text(encoding="utf-8"))
+        except:
+            errors = []
+        if not errors:
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content="🐱 错题本是空的，继续保持！")
+            return True
+        unreviewed = [e for e in errors if not e.get("reviewed_date")]
+        reviewed = [e for e in errors if e.get("reviewed_date")]
+        lines = ["📋 错题本", ""]
+        if unreviewed:
+            lines.append(f"❌ 待复习：{len(unreviewed)} 道")
+            for e in unreviewed:
+                q = e.get("question", "")[:80]
+                lines.append(f"  [{e.get('error_id','?')}] {q} （{e.get('error_type','?')}）")
+            lines.append("")
+        if reviewed:
+            lines.append(f"✅ 已订正：{len(reviewed)} 道")
+        lines.append("")
+        lines.append("回复「错题复习」生成错题订正任务。")
+        send_feishu(receive_id=reply_target, msg_type="text", content="\n".join(lines))
+        return True
+
+    # ── 错题复习 ──
+    if text_clean in ("错题复习", "错题订正"):
+        error_file = DATA_DIR / "error_book.json"
+        if not error_file.exists():
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content="🐱 错题本是空的，没有需要复习的错题～")
+            return True
+        try:
+            errors = json.loads(error_file.read_text(encoding="utf-8"))
+        except:
+            errors = []
+        unreviewed = [e for e in errors if not e.get("reviewed_date")]
+        if not unreviewed:
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content="🐱 所有错题都已订正，太棒了！")
+            return True
+        # 生成错题复习任务
+        send_feishu(receive_id=reply_target, msg_type="text",
+                   content=f"🐱 正在生成错题复习任务（{len(unreviewed)}道），请稍等...")
+        review_test_id = _gen_test_id('E')
+        review_file = str(DATA_DIR / "questions" / f"error_review_{review_test_id}.json")
+        errors_summary = "\n".join([
+            f"错题{e.get('error_id','?')}: {e.get('question','')[:150]}\n  学生答案: {e.get('student_answer','')[:100]}\n  正确答案: {e.get('correct_answer','')[:100]}\n  错误类型: {e.get('error_type','计算粗心')}"
+            for e in unreviewed
+        ])
+        session = init_new_session()
+        result = run(
+            f"请为学生生成一份错题复习卷。\n\n"
+            f"═══════════════════════════════════════\n"
+            f"第零步：生成编号\n"
+            f"═══════════════════════════════════════\n"
+            f"test_id = \"{review_test_id}\"\n"
+            f"每道题用 _gen_question_id() 生成全局唯一编号\n\n"
+            f"═══════════════════════════════════════\n"
+            f"错题列表（共{len(unreviewed)}道）：\n"
+            f"═══════════════════════════════════════\n"
+            f"{errors_summary}\n\n"
+            f"═══════════════════════════════════════\n"
+            f"任务要求：\n"
+            f"═══════════════════════════════════════\n"
+            f"1. 把这{len(unreviewed)}道错题原样出在卷子上，每题标注原错题编号\n"
+            f"2. 对每道错题，额外出一道同类型的变式题（换个数字/场景，考点相同）\n"
+            f"3. 每题给出详细解题步骤提示\n"
+            f"4. 用 write_file 存入 {review_file}\n"
+            f"5. 格式：{{\"test_id\":\"{review_test_id}\",\"date\":\"{datetime.now().strftime('%Y-%m-%d')}\",\"type\":\"error_review\",\"error_ids\":[{','.join([repr(e.get('error_id','')) for e in unreviewed])}],\"questions\":[{{id,question,answer,hint,original_error_id}}]}}\n\n"
+            f"⚠️ 注意：只存储，不要调用 send_feishu 推送！系统会自动从学习队列推送。",
+            session,
+        )
+        # 插入队列
+        q3 = _load_learning_queue()
+        pending_idx = None
+        for i, t in enumerate(q3.get("queue", [])):
+            if t.get("status") in ("pending", "in_progress", "image_received"):
+                pending_idx = i
+                break
+        review_task = {
+            "task_id": review_test_id,
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "type": "error_review",
+            "title": f"🔄 错题订正",
+            "status": "pending",
+            "priority": 1,
+            "questions_file": review_file,
+            "difficulty": "normal",
+            "image_paths": [],
+            "submitted_at": None,
+            "graded_at": None,
+        }
+        existing_ids = {t["task_id"] for t in q3.get("queue", [])}
+        if review_test_id not in existing_ids:
+            if pending_idx is not None:
+                q3["queue"].insert(pending_idx, review_task)
+            else:
+                q3.setdefault("queue", []).append(review_task)
+        _save_learning_queue(q3)
+        _log(f"[QUEUE] 错题复习任务 {review_test_id} 已插入队列")
+        send_feishu(receive_id=reply_target, msg_type="text",
+                   content=f"🐱 错题复习任务已生成（{review_test_id}），回复「继续」开始订正！")
+        return True
+
     # ── 整理（错题）──
     if text_clean == "整理":
         return _organize_error_upload(sender_id, chat_id, reply_target, is_auto=False)
