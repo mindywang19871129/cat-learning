@@ -800,7 +800,7 @@ def _handle_queue_command(text: str, sender_id: str, chat_id: str, reply_target:
                                "📖 正在读取知识库和错题记录...\n"
                                "✍️ 正在出题中（这可能需要1-2分钟）...\n"
                                "⏳ 出题完成后会自动推送第一个任务，请稍等～")
-            threading.Thread(target=scheduled_daily_push, daemon=True).start()
+            threading.Thread(target=lambda: scheduled_daily_push(is_manual=True), daemon=True).start()
             return True
         
         # 设置当前活跃任务
@@ -1184,7 +1184,7 @@ def _check_today_questions_completed():
     return False, "今天题目已全部完成，明天再来吧"
 
 
-def _can_scheduled_push_today():
+def _can_scheduled_push_today(is_manual: bool = False):
     """定时推送专用检查：防止旧题永久阻塞每日推送。
     规则：
     - 学习队列中有未完成任务 → 不推送（等孩子做完）
@@ -1192,13 +1192,14 @@ def _can_scheduled_push_today():
     - 文件日期 = 今天 → 今天已推送，不重复
     - 文件日期 = 昨天且未完成 → 前一天未批改，不出后一天
     - 文件日期更早 → 旧题作废，允许推送
+    is_manual: True表示手动触发（跳过暑假隔天检查）
     返回 (can_push: bool, reason: str)
     """
     today_str = datetime.now().strftime("%Y-%m-%d")
 
-    # ── 暑假模式：隔天推送（周3-4次）──
+    # ── 暑假模式：隔天推送（仅定时触发，手动触发不检查）──
     semester = _get_current_semester()
-    if semester.get("mode") == "summer":
+    if not is_manual and semester.get("mode") == "summer":
         last_push_file = DATA_DIR / ".last_push_date"
         if last_push_file.exists():
             last_date = last_push_file.read_text().strip()
@@ -1844,18 +1845,19 @@ def _log(msg: str):
 
 _SCHEDULED_PUSH_LOCK = threading.Lock()
 
-def scheduled_daily_push():
-    """定时每日推送：根据当前学期自动选择 tasks.normal 或 tasks.summer，逐个生成，全部入队列，只推送第一个。"""
+def scheduled_daily_push(is_manual: bool = False):
+    """定时每日推送：根据当前学期自动选择 tasks.normal 或 tasks.summer，逐个生成，全部入队列，只推送第一个。
+    is_manual=True 表示手动触发（跳过暑假隔天检查）。"""
     if not _SCHEDULED_PUSH_LOCK.acquire(blocking=False):
         _log("[SCHEDULER] ⛔ 已有推送任务正在执行，跳过重复调用")
         return
     _saved_send_feishu = None
     _saved_schema = None
     try:
-        _log(f"[SCHEDULER] ====== 开始执行每日推送 ======")
+        _log(f"[SCHEDULER] ====== 开始执行每日推送 (manual={is_manual}) ======")
         _log(f"[SCHEDULER] 时间: {datetime.now()}")
 
-        can_push, reason = _can_scheduled_push_today()
+        can_push, reason = _can_scheduled_push_today(is_manual=is_manual)
         _log(f"[SCHEDULER] 推送前置检查: can_push={can_push}, reason={reason}")
         if not can_push:
             _log(f"[SCHEDULER] ⛔ 跳过推送: {reason}")
