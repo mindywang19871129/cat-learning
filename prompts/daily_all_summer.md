@@ -1,28 +1,40 @@
 请一次性生成今日全部暑假学习任务。send_feishu已被系统禁用，只存储文件！
 
-⚠️ 三下复习：先读 data/error_book.json 和 data/mastery.json（三下数据），找到1-2道待复习的错题或薄弱知识点（score<70），融入计算热身和数学练习中。
+⚠️ 核心逻辑：用 data/mastery.json 动态追踪进度。已引入的四上知识点（score=10）可在计算中出题，未引入的（score=0或无记录）只能在数学新概念中讲。
 
 ═══════════════════════════════════════
 任务1：计算热身 (test_id={test_id_c})
 ═══════════════════════════════════════
-纯计算6题（暑假减量）+ 1道三下复习计算题（从error_book中选一道计算类错题，做变式题）：两位数×一位数1题 + 三位数÷一位数1题 + 三位数加减法1题 + 四则混合1题 + 连乘/连除1题 + 有余数除法1题 + 三下复习计算1题。每道题用 _gen_question_id() 生成编号，给出标准答案。三下复习题标注 origin:"三下复习"。
-⚠️ 禁止出大数读写、四上知识点！这些在任务2数学新概念中讲。
+读 data/mastery.json 和 data/error_book.json。
+出7道纯计算题：
+- 三下计算：两位数×一位数、三位数÷一位数、三位数加减法、四则混合、连乘/连除、有余数除法（各1题，共6题）
+- 已引入的四上计算：如果 mastery.json 中有 score=10 的四上知识点（如大数读写、三位数×两位数），可出1题替代上面1题
+- 三下复习：从 error_book 选1道三下计算错题做变式
+如果 error_book 为空，则出7题三下计算。
+每道题用 _gen_question_id() 生成编号，给出标准答案。
 用 write_file 存入 data/questions/questions_{today_str}_calc.json
-格式：{{"test_id":"{test_id_c}","date":"{today_str}","type":"calc","questions":[{{id,question,answer,origin}}]}}
+格式：{{"test_id":"{test_id_c}","date":"{today_str}","type":"calc","questions":[{{id,question,answer}}]}}
 
 ═══════════════════════════════════════
 任务2：数学新概念 (test_id={test_id_m})
 ═══════════════════════════════════════
-读 data/knowledge_map_4th.json 和 data/mastery.json，找下一个未掌握的单元。用生活化语言讲解该单元的一个核心概念（200-300字），像老师讲课一样。包括：生活引入→概念定义→核心要点→例题演示→常见误区→小口诀。0道题，纯讲解。
+读 data/knowledge_map_4th.json 和 data/mastery.json。
+找下一个未掌握的单元（score=0 或无记录），讲解该单元第一个核心概念（200-300字）。
+格式：生活引入→概念定义→核心要点→例题演示→常见误区→小口诀。
+0道题，纯讲解。
+⚠️ 讲解完成后，必须用 edit_file 更新 data/mastery.json，将对应 topic_id 的 score 设为 10，status 设为 "introduced"。
 用 write_file 存入 data/questions/questions_{today_str}_math_preview.json
-格式：{{"test_id":"{test_id_m}","date":"{today_str}","type":"math_preview","unit":"单元名","topic":"知识点","introduction":"完整讲解","questions":[]}}
+格式：{{"test_id":"{test_id_m}","date":"{today_str}","type":"math_preview","unit":"单元名","topic":"知识点","topic_id":"math-4a-X","introduction":"完整讲解","questions":[]}}
 
 ═══════════════════════════════════════
 任务3：数学练习 (test_id={test_id_n})
 ═══════════════════════════════════════
-针对任务2讲的知识点，出3道基础题（basic）+ 1道三下复习应用题（从error_book中选一道应用类错题，做变式题）：直接套用1题+稍加变化1题+生活应用1题+三下复习应用1题。每题给出标准答案+解题步骤。三下复习题标注 origin:"三下复习"。
+针对任务2刚讲的知识点，出3道基础题（basic）：
+- 直接套用概念1题 + 稍加变化1题 + 生活应用1题
+- 如果 error_book 有三下错题，加1道三下应用变式题（共4题）
+每题给出标准答案+解题步骤。
 用 write_file 存入 data/questions/questions_{today_str}_math_practice.json
-格式：{{"test_id":"{test_id_n}","date":"{today_str}","type":"math_practice","questions":[{{id,question,answer,hint,difficulty:"basic",topic_id,origin}}]}}
+格式：{{"test_id":"{test_id_n}","date":"{today_str}","type":"math_practice","questions":[{{id,question,answer,hint,difficulty:"basic",topic_id}}]}}
 
 ═══════════════════════════════════════
 任务4：KET阅读 (test_id={test_id_k})
@@ -47,5 +59,5 @@ Part7: {{"test_id":"{test_id_w}","date":"{today_str}","type":"ket_writing","ket_
 格式：{{"test_id":"{test_id_geo}","date":"{today_str}","type":"geometry_preview","questions":[{{id,question,answer,hint,image_path:"...",difficulty:"basic",topic_id}}]}}
 
 ═══════════════════════════════════════
-完成后确认：6个文件全部已写入，不要调用send_feishu。
+完成后确认：6个文件全部已写入，mastery.json已更新，不要调用send_feishu。
 ═══════════════════════════════════════
