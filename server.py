@@ -859,6 +859,33 @@ def _handle_queue_command(text: str, sender_id: str, chat_id: str, reply_target:
                    content="📝 已进入学校错题整理模式\n\n请连续发送学校错题图片。\n发完后回复「整理」开始分析。")
         return True
     
+    # ── 清除错题（需密码验证）──
+    if text_clean.startswith("清除错题") or text_clean.startswith("清空错题"):
+        import hashlib
+        pw = text_clean.replace("清除错题", "").replace("清空错题", "").strip()
+        if not pw:
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content="🐱 请提供密码：清除错题 密码")
+            return True
+        try:
+            adj_file = DATA_DIR / "adjustments.json"
+            if adj_file.exists():
+                adjustments = json.loads(adj_file.read_text(encoding="utf-8"))
+                stored_hash = adjustments.get("admin_password", "")
+                if stored_hash and hashlib.sha256(pw.encode()).hexdigest() == stored_hash:
+                    error_file = DATA_DIR / "error_book.json"
+                    error_file.write_text("[]")
+                    _log("[QUEUE] 错题本已清空（密码验证通过）")
+                    send_feishu(receive_id=reply_target, msg_type="text",
+                               content="🐱 错题本已清空。")
+                    return True
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content="🐱 密码错误，请重试。")
+        except Exception as e:
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content=f"🐱 操作失败：{e}")
+        return True
+
     # ── 查看错题 ──
     if text_clean in ("查看错题", "错题本"):
         error_file = DATA_DIR / "error_book.json"
