@@ -596,10 +596,13 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
                     "submitted_at": None,
                     "graded_at": None,
                 }
-                if pending_idx is not None:
-                    q3["queue"].insert(pending_idx, review_task)
-                else:
-                    q3.setdefault("queue", []).append(review_task)
+                # 去重：不插入已存在的任务ID
+                existing_ids = {t["task_id"] for t in q3.get("queue", [])}
+                if review_test_id not in existing_ids:
+                    if pending_idx is not None:
+                        q3["queue"].insert(pending_idx, review_task)
+                    else:
+                        q3.setdefault("queue", []).append(review_task)
                 _save_learning_queue(q3)
                 _log(f"[ADAPTIVE] 基础复习任务 {review_test_id} 已插入队列")
                 send_feishu(receive_id=reply_target, msg_type="text",
