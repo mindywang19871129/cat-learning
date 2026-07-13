@@ -499,8 +499,9 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
                         "⚠️ 铁则：学生可能真的答错了，所以不能把OCR结果改成标准答案！\n"
                         "你只能修正OCR技术层面的识别错误。\n\n"
                         "常见数字混淆（必须修正）：\n"
-                        "- 数字：0↔O, 1↔l↔I, 2↔Z, 5↔S, 6↔G, 7↔1, 8↔B, 9↔g\n"
-                        "- 运算符：×↔x, ÷↔+, =↔-\n\n"
+                        "- 数字：0↔O, 1↔l↔I, 2↔Z, 5↔S, 6↔G, 7↔1, 8↔B, 9↔g, 4↔9\n"
+                        "- 运算符：×↔x, ÷↔+, =↔-\n"
+                        "- 有余数除法：注意识别\"余\"字和余数数字\n\n"
                         "输出格式（逐题，每行一个）：\n"
                         "题号|修正后的答案\n\n"
                         "⚠️ 重要：每道题都必须输出修正后的数字/表达式，不要输出'保留'或'不确定'等中文！\n"
@@ -693,11 +694,14 @@ def _grade_task_recheck(sender_id: str, chat_id: str, reply_target: str, task: d
 
         # 重新OCR所有图片
         img_paths = task.get("image_paths", [])
+        existing_paths = [p for p in img_paths if Path(p).exists()]
+        if not existing_paths:
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content="🐱 之前的图片已经清理了，小肥猫没法重新识别了。\n请重新拍照发给我，发完后回复「提交」～")
+            return
+
         all_ocr = []
-        for img_path in img_paths:
-            if not Path(img_path).exists():
-                _log(f"[RECHECK] ⚠️ 图片文件不存在，跳过: {img_path}")
-                continue
+        for img_path in existing_paths:
             try:
                 ocr_result = json.loads(enhanced_ocr_image(img_path))
                 if ocr_result.get("success"):
@@ -705,7 +709,38 @@ def _grade_task_recheck(sender_id: str, chat_id: str, reply_target: str, task: d
                     _log(f"[RECHECK] 重新OCR完成: {img_path[-40:]}")
             except Exception as e:
                 _log(f"[RECHECK] OCR失败: {e}")
-        ocr_text = "\n---\n".join(all_ocr) if all_ocr else "（OCR重新识别失败，使用历史结果）"
+
+        if not all_ocr:
+            send_feishu(receive_id=reply_target, msg_type="text",
+                       content="🐱 OCR识别失败了，请重新拍照发给我，发完后回复「提交」～")
+            return
+
+        ocr_text = "\n---\n".join(all_ocr)
+
+        # 更严格的OCR校验
+        try:
+            validate_prompt = (
+                "你是OCR手写数字识别校验专家。请修正OCR的识别错误。\n\n"
+                "⚠️ 铁则：学生可能真的答错了，所以不能把OCR结果改成标准答案！\n"
+                "你只能修正OCR技术层面的识别错误。\n\n"
+                "常见数字混淆（必须修正）：\n"
+                "- 数字：0↔O, 1↔l↔I, 2↔Z, 5↔S, 6↔G, 7↔1, 8↔B, 9↔g, 4↔9\n"
+                "- 运算符：×↔x, ÷↔+, =↔-\n"
+                "- 有余数除法：注意识别\"余\"字和余数数字\n\n"
+                "输出格式（逐题，每行一个）：\n"
+                "题号|修正后的答案\n\n"
+                "⚠️ 重要：每道题都必须输出修正后的数字/表达式，不要输出'保留'或'不确定'等中文！\n"
+                "如果OCR结果看起来是合理的数字（如'47'、'258'），直接输出该数字。\n"
+                "如果明显是识别错误（如'Zl'→'21'），修正后输出正确数字。\n\n"
+                f"原始OCR结果：\n{ocr_text}\n\n"
+                "请逐题输出修正后的答案："
+            )
+            validated = call_llm(validate_prompt)
+            if validated and len(validated) > 3 and "|" in validated:
+                _log(f"[RECHECK] OCR校验修正: {validated[:100]}")
+                ocr_text = validated
+        except Exception as e:
+            _log(f"[RECHECK] OCR校验失败: {e}")
 
         result = run(
             f"[系统上下文：飞书用户 sender_open_id={sender_id}, 回复目标ID={reply_target}]\n"
@@ -714,11 +749,12 @@ def _grade_task_recheck(sender_id: str, chat_id: str, reply_target: str, task: d
             f"{ocr_text}\n\n"
             f"试卷题目和标准答案：\n{qs_summary}\n\n"
             f"请执行：\n"
-            f"1. ⚠️ 重点核查数字：7→1, 2→7, 8→6, 5→3 等常见手写混淆\n"
-            f"2. 对比标准答案格式，判断OCR结果是否合理\n"
-            f"3. 逐题重新批改（✅/❌ + 解析）\n"
-            f"4. 更新mastery/error_book\n"
-            f"5. 用 send_feishu(receive_id=\"{reply_target}\") 发送重新批改结果\n"
+            f"1. ⚠️ 重点核查数字：7↔1, 9↔4, 2↔7, 8↔6, 5↔3 等常见手写混淆\n"
+            f"2. ⚠️ 有余数除法：注意商和余数的数字是否正确\n"
+            f"3. 对比标准答案格式，判断OCR结果是否合理\n"
+            f"4. 逐题重新批改（✅/❌ + 解析）\n"
+            f"5. 更新mastery/error_book\n"
+            f"6. 用 send_feishu(receive_id=\"{reply_target}\") 发送重新批改结果\n"
             f"⚠️ 必须调用send_feishu！",
             session,
         )
@@ -1097,12 +1133,12 @@ def _handle_queue_command(text: str, sender_id: str, chat_id: str, reply_target:
                     target_task = t
                     break
         if not target_task:
-            # 没有活跃任务，找最近批改过的任务
-            graded = [t for t in q.get("queue", []) if t.get("status") == "graded"]
-            if graded:
-                # 按 graded_at 排序，取最新的
-                graded.sort(key=lambda x: x.get("graded_at", ""), reverse=True)
-                target_task = graded[0]
+            # 没有活跃任务，找最近批改过或已提交的任务
+            candidates = [t for t in q.get("queue", []) if t.get("status") in ("graded", "submitted")]
+            if candidates:
+                # 按 graded_at/submitted_at 排序，取最新的
+                candidates.sort(key=lambda x: x.get("graded_at") or x.get("submitted_at") or "", reverse=True)
+                target_task = candidates[0]
         if not target_task:
             send_feishu(receive_id=reply_target, msg_type="text",
                        content="🐱 没有找到已批改的任务，请先完成一个任务再试～")

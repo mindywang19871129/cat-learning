@@ -644,7 +644,8 @@ def enhanced_ocr_image(image_path: str, use_llm_vision: bool = True) -> str:
                 "- 题号可能是 1. 2. 3. 或 ① ② ③ 或 Q000001\n"
                 "- 字迹潦草也要尽力辨认，无法辨认标注[?]\n"
                 "- 不要合并不同题目的答案，保持逐题格式\n"
-                "- 只输出识别结果，不要解释"
+                "- 只输出识别结果，不要解释\n"
+                "- ⚠️ 特别注意数字混淆：4↔9, 7↔1, 2↔7, 8↔6, 5↔3"
             )
         else:
             vision_prompt = (
@@ -657,7 +658,8 @@ def enhanced_ocr_image(image_path: str, use_llm_vision: bool = True) -> str:
                 "- 词汇答案：识别选项字母（A/B/C/D）或单词\n"
                 "- 题号可能是 1.  2.  3.  或 .  ①  ②  ③  或 Q000001\n"
                 "- 字迹潦草也要尽力辨认，无法辨认标注[?]\n"
-                "- 不要合并不同题目的答案，保持逐题格式"
+                "- 不要合并不同题目的答案，保持逐题格式\n"
+                "- ⚠️ 特别注意数字混淆：4↔9, 7↔1, 2↔7, 8↔6, 5↔3"
             )
         llm_result = analyze_image_via_llm(processed_path, vision_prompt)
         llm_data = json.loads(llm_result)
