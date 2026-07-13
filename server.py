@@ -436,9 +436,12 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
         _save_learning_queue(q)
         return True
 
-    # 合并图片缓存
+    # 合并图片缓存（保留旧图片供重新批改使用）
     cached = _IMAGE_CACHE.get(active_id, [])
-    task["image_paths"].extend([c["path"] for c in cached])
+    new_paths = [c["path"] for c in cached]
+    # 只保留存在的图片
+    existing_paths = [p for p in task.get("image_paths", []) if Path(p).exists()]
+    task["image_paths"] = existing_paths + new_paths
     _IMAGE_CACHE.pop(active_id, None)
     _IMAGE_CACHE_META.pop(active_id, None)
 
@@ -484,10 +487,7 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
                         all_ocr.append(ocr_result.get("text", ""))
                 except Exception as e:
                     _log(f"[QUEUE] ⚠️ OCR失败: {img_path} - {e}")
-                try:
-                    Path(img_path).unlink(missing_ok=True)
-                except Exception:
-                    pass
+                # 不删除图片，保留供重新批改使用
 
             ocr_text = "\n---\n".join(all_ocr)
 
@@ -560,7 +560,7 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
                 if t["task_id"] == task["task_id"]:
                     t["status"] = "graded"
                     t["graded_at"] = datetime.now().isoformat()
-                    t["image_paths"] = []
+                    # 保留图片路径供重新批改使用
                     break
             
             # ── 自适应难度：检测是否需要基础复习（仅非复习任务触发）──
@@ -1374,18 +1374,28 @@ def _handle_feishu_event(event: dict):
             return
         
         # 学习队列模式：图片绑定当前任务
-        if active_id and q.get("mode") == "answering":
+        bind_id = active_id
+        if not bind_id or q.get("mode") != "answering":
+            # 没有活跃任务时，找最近批改过的任务绑定
+            graded = [t for t in q.get("queue", []) if t.get("status") == "graded" and t.get("image_paths")]
+            if graded:
+                graded.sort(key=lambda x: x.get("graded_at", ""), reverse=True)
+                bind_id = graded[0]["task_id"]
+                q["active_task_id"] = bind_id
+                q["mode"] = "answering"
+                _save_learning_queue(q)
+        if bind_id:
             image_key = content.get("image_key", "")
             if image_key:
                 local_path = download_feishu_image(message_id, image_key)
                 if local_path:
-                    cache = _IMAGE_CACHE.setdefault(active_id, [])
+                    cache = _IMAGE_CACHE.setdefault(bind_id, [])
                     cache.append({"path": local_path, "time": time.time()})
                     now = time.time()
-                    meta = _IMAGE_CACHE_META.setdefault(active_id, {"first_image_at": now, "last_image_at": now, "auto_submitted": False})
+                    meta = _IMAGE_CACHE_META.setdefault(bind_id, {"first_image_at": now, "last_image_at": now, "auto_submitted": False})
                     meta["last_image_at"] = now
                     send_feishu(receive_id=reply_target, msg_type="text",
-                               content=f"🐱 收到 {active_id} 的第 {len(cache)} 张答案图片。\n如果还有图片，继续发。\n发完请回复「提交」开始批改。")
+                               content=f"🐱 收到 {bind_id} 的第 {len(cache)} 张答案图片。\n如果还有图片，继续发。\n发完请回复「提交」开始批改。")
             return
 
     # 使用会话缓存，保持对话历史
