@@ -680,7 +680,7 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
     return True
 
 def _grade_task_recheck(sender_id: str, chat_id: str, reply_target: str, task: dict):
-    """重新批改：使用更严格的OCR校验再次批改。"""
+    """重新批改：重新OCR所有图片+更严格的校验。"""
     try:
         session = _get_or_create_session(sender_id, chat_id)
         qf = Path(task["questions_file"])
@@ -691,18 +691,34 @@ def _grade_task_recheck(sender_id: str, chat_id: str, reply_target: str, task: d
         qs = data.get("questions", data.get("math", []) + data.get("english", []) + data.get("vocab", []))
         qs_summary = "\n".join([f"  {q['id']}: {q['question'][:100]}... | 答案:{q.get('answer','')}" for q in qs])
 
+        # 重新OCR所有图片
+        img_paths = task.get("image_paths", [])
+        all_ocr = []
+        for img_path in img_paths:
+            if not Path(img_path).exists():
+                _log(f"[RECHECK] ⚠️ 图片文件不存在，跳过: {img_path}")
+                continue
+            try:
+                ocr_result = json.loads(enhanced_ocr_image(img_path))
+                if ocr_result.get("success"):
+                    all_ocr.append(ocr_result.get("text", ""))
+                    _log(f"[RECHECK] 重新OCR完成: {img_path[-40:]}")
+            except Exception as e:
+                _log(f"[RECHECK] OCR失败: {e}")
+        ocr_text = "\n---\n".join(all_ocr) if all_ocr else "（OCR重新识别失败，使用历史结果）"
+
         result = run(
             f"[系统上下文：飞书用户 sender_open_id={sender_id}, 回复目标ID={reply_target}]\n"
-            f"⚠️ 这是重新批改请求！学生认为之前的批改结果有误（可能是OCR识别错误）。\n"
-            f"请重新检查之前的OCR识别结果，特别注意数字识别错误。\n\n"
+            f"⚠️ 这是重新批改请求！学生认为之前的批改结果有误。\n"
+            f"已重新OCR识别图片，新结果如下：\n\n"
+            f"{ocr_text}\n\n"
             f"试卷题目和标准答案：\n{qs_summary}\n\n"
             f"请执行：\n"
-            f"1. 检查会话历史中的OCR识别结果\n"
-            f"2. ⚠️ 重点核查数字：7→1, 2→7, 8→6, 5→3 等常见手写混淆\n"
-            f"3. 对比标准答案格式，判断OCR结果是否合理\n"
-            f"4. 逐题重新批改（✅/❌ + 解析）\n"
-            f"5. 更新mastery/error_book\n"
-            f"6. 用 send_feishu(receive_id=\"{reply_target}\") 发送重新批改结果\n"
+            f"1. ⚠️ 重点核查数字：7→1, 2→7, 8→6, 5→3 等常见手写混淆\n"
+            f"2. 对比标准答案格式，判断OCR结果是否合理\n"
+            f"3. 逐题重新批改（✅/❌ + 解析）\n"
+            f"4. 更新mastery/error_book\n"
+            f"5. 用 send_feishu(receive_id=\"{reply_target}\") 发送重新批改结果\n"
             f"⚠️ 必须调用send_feishu！",
             session,
         )
@@ -1070,26 +1086,32 @@ def _handle_queue_command(text: str, sender_id: str, chat_id: str, reply_target:
     if text_clean == "整理":
         return _organize_error_upload(sender_id, chat_id, reply_target, is_auto=False)
     
-    # ── 重新检查（重新批改当前任务）──
+    # ── 重新检查（重新批改当前或最近完成的任务）──
     if text_clean in ("重新检查", "重新批改"):
         q = _load_learning_queue()
         active_id = q.get("active_task_id")
-        if not active_id:
+        target_task = None
+        if active_id:
+            for t in q.get("queue", []):
+                if t["task_id"] == active_id:
+                    target_task = t
+                    break
+        if not target_task:
+            # 没有活跃任务，找最近批改过的任务
+            graded = [t for t in q.get("queue", []) if t.get("status") == "graded"]
+            if graded:
+                # 按 graded_at 排序，取最新的
+                graded.sort(key=lambda x: x.get("graded_at", ""), reverse=True)
+                target_task = graded[0]
+        if not target_task:
             send_feishu(receive_id=reply_target, msg_type="text",
-                       content="🐱 当前没有正在进行的任务哦～")
+                       content="🐱 没有找到已批改的任务，请先完成一个任务再试～")
             return True
-        # 找到当前任务，重新提交批改
-        for t in q.get("queue", []):
-            if t["task_id"] == active_id and t.get("status") == "graded":
-                t["status"] = "submitted"
-                _save_learning_queue(q)
-                send_feishu(receive_id=reply_target, msg_type="text",
-                           content=f"🐱 正在重新批改 {active_id}，请稍等...")
-                # 重新触发批改（复用已有图片路径）
-                threading.Thread(target=lambda: _grade_task_recheck(sender_id, chat_id, reply_target, t), daemon=True).start()
-                return True
+        target_task["status"] = "submitted"
+        _save_learning_queue(q)
         send_feishu(receive_id=reply_target, msg_type="text",
-                   content="🐱 当前任务还没批改完，或者还没有提交哦～")
+                   content=f"🐱 正在重新批改 {target_task['task_id']}，请稍等...")
+        threading.Thread(target=lambda: _grade_task_recheck(sender_id, chat_id, reply_target, target_task), daemon=True).start()
         return True
 
     # ── 手动触发今日学习任务 ──
