@@ -868,13 +868,28 @@ def _get_feishu_token() -> str:
     global _feishu_token, FEISHU_APP_ID, FEISHU_APP_SECRET
     if _feishu_token["token"] and time.time() < _feishu_token["expires_at"] - 60:
         return _feishu_token["token"]
-    # 兜底：如果模块变量为空，重新从 os.environ 读取（可能被 _load_dotenv 后设置）
+    # 兜底：如果模块变量为空，从 os.environ 重新读取
     if not FEISHU_APP_ID:
         FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID", "")
     if not FEISHU_APP_SECRET:
         FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "")
+    # 最终兜底：直接读取 .env 文件
     if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
-        sys.stderr.write(f"[FEISHU] ❌ 密钥为空 APP_ID={'SET' if FEISHU_APP_ID else 'EMPTY'}\n")
+        try:
+            env_file = HOME / ".env"
+            if env_file.exists():
+                for line in open(env_file, encoding="utf-8"):
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        if k.strip() == "FEISHU_APP_ID":
+                            FEISHU_APP_ID = v.strip()
+                        elif k.strip() == "FEISHU_APP_SECRET":
+                            FEISHU_APP_SECRET = v.strip()
+        except Exception:
+            pass
+    if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
+        sys.stderr.write(f"[FEISHU] ❌ 密钥为空 APP_ID={'SET' if FEISHU_APP_ID else 'EMPTY'} SECRET={'SET' if FEISHU_APP_SECRET else 'EMPTY'}\n")
         sys.stderr.flush()
         return ""
     import requests
