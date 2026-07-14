@@ -675,9 +675,6 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
     if is_auto:
         send_feishu(receive_id=reply_target, msg_type="text",
                    content=f"🐱 我看你有一会儿没继续发图片啦，已经先帮你自动提交批改了。\n如果还有漏拍的题，等这项批改完可以再告诉我～")
-    else:
-        send_feishu(receive_id=reply_target, msg_type="text",
-                   content=f"🐱 收到 {task['task_id']} 的 {len(task['image_paths'])} 张答案图片，正在批改中...")
     return True
 
 def _grade_task_recheck(sender_id: str, chat_id: str, reply_target: str, task: dict):
