@@ -321,14 +321,112 @@ def _push_first_pending_to_all():
     for chat_id in poll_cfg.get("chat_ids", []):
         _push_task_to_feishu(task, chat_id)
 
+def _send_feishu_direct(receive_id: str, content: str, msg_type: str = "text") -> str:
+    """直接读取 .env 发送飞书消息，不依赖 core.py 的模块级变量。
+    解决 gunicorn worker/scheduler 线程中 env 变量不可见的问题。"""
+    import requests as _requests
+
+    # 直接从 .env 文件读取（绕过 os.environ 缓存问题）
+    env_file = HOME / ".env"
+    feishu_app_id = ""
+    feishu_app_secret = ""
+    if env_file.exists():
+        try:
+            for line in open(env_file, encoding="utf-8"):
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    if k.strip() == "FEISHU_APP_ID":
+                        feishu_app_id = v.strip().strip('"').strip("'")
+                    elif k.strip() == "FEISHU_APP_SECRET":
+                        feishu_app_secret = v.strip().strip('"').strip("'")
+        except Exception as e:
+            _log(f"[FEISHU_DIRECT] 读取 .env 失败: {e}")
+            return f"ERROR: 读取 .env 失败: {e}"
+
+    if not feishu_app_id or not feishu_app_secret:
+        _log(f"[FEISHU_DIRECT] 密钥为空 APP_ID={'SET' if feishu_app_id else 'EMPTY'} SECRET={'SET' if feishu_app_secret else 'EMPTY'}")
+        return "ERROR: FEISHU_APP_ID/FEISHU_APP_SECRET 未在 .env 中配置"
+
+    feishu_base = CFG.get("feishu", {}).get("base_url", "https://open.feishu.cn/open-apis")
+
+    # 获取 token
+    try:
+        resp = _requests.post(
+            f"{feishu_base}/auth/v3/tenant_access_token/internal",
+            json={"app_id": feishu_app_id, "app_secret": feishu_app_secret},
+            timeout=10,
+        )
+        data = resp.json()
+        if data.get("code") != 0:
+            _log(f"[FEISHU_DIRECT] 获取token失败: code={data.get('code')} msg={data.get('msg','')}")
+            return f"ERROR: token获取失败 code={data.get('code')} msg={data.get('msg','')}"
+        token = data["tenant_access_token"]
+    except Exception as e:
+        _log(f"[FEISHU_DIRECT] 请求token异常: {e}")
+        return f"ERROR: token请求异常: {e}"
+
+    # 发送消息
+    try:
+        # 自动识别 receive_id 类型
+        if receive_id.startswith("oc_"):
+            id_type = "chat_id"
+        elif receive_id.startswith("ou_"):
+            id_type = "open_id"
+        elif receive_id.startswith("on_"):
+            id_type = "union_id"
+        else:
+            id_type = "open_id"
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+        if msg_type == "text":
+            body = {
+                "receive_id": receive_id,
+                "msg_type": "text",
+                "content": json.dumps({"text": content}),
+            }
+        elif msg_type == "interactive":
+            body = {
+                "receive_id": receive_id,
+                "msg_type": "interactive",
+                "content": content,
+            }
+        else:
+            body = {
+                "receive_id": receive_id,
+                "msg_type": "text",
+                "content": json.dumps({"text": content}),
+            }
+
+        resp = _requests.post(
+            f"{feishu_base}/im/v1/messages?receive_id_type={id_type}",
+            headers=headers,
+            json=body,
+            timeout=10,
+        )
+        data = resp.json()
+        if data.get("code") == 0:
+            msg_id = data.get("data", {}).get("message_id", "")
+            _log(f"[FEISHU_DIRECT] ✅ 已发送: receive_id={receive_id[:16]}... msg_id={msg_id[:16]}...")
+            return f"OK: message_id={msg_id}"
+        _log(f"[FEISHU_DIRECT] 发送失败: code={data.get('code')} msg={data.get('msg','')}")
+        return f"ERROR: 发送失败 code={data.get('code')} msg={data.get('msg','')}"
+    except Exception as e:
+        _log(f"[FEISHU_DIRECT] 发送异常: {e}")
+        return f"ERROR: 发送异常: {e}"
+
+
 def _push_task_to_feishu(task: dict, reply_target: str):
     """推送单个任务到飞书。"""
     try:
         qf = Path(task["questions_file"])
         if not qf.exists():
             _log(f"[PUSH] ⚠️ 题目文件不存在: {task['questions_file']}")
-            send_feishu(receive_id=reply_target, msg_type="text",
-                       content=f"🐱 找不到任务 {task['task_id']} 的题目文件，请联系管理员～")
+            _send_feishu_direct(reply_target, f"🐱 找不到任务 {task['task_id']} 的题目文件，请联系管理员～")
             return
         data = json.loads(qf.read_text(encoding="utf-8"))
         task_type = task.get("type", "")
@@ -351,7 +449,7 @@ def _push_task_to_feishu(task: dict, reply_target: str):
                 "📝 请认真阅读上面的概念讲解，理解后回复「继续」开始做练习。",
                 "🐱 加油！"
             ]
-            send_feishu(receive_id=reply_target, msg_type="text", content="\n".join(lines))
+            _send_feishu_direct(reply_target, "\n".join(lines))
             _log(f"[QUEUE] 推送概念讲解任务 {task['task_id']} 到 {reply_target[:16]}...")
             return
         elif task_type == "ket_writing":
@@ -398,12 +496,11 @@ def _push_task_to_feishu(task: dict, reply_target: str):
         lines.append("发完所有图片后回复「提交」开始批改。")
         lines.append("🐱 加油！")
         
-        send_result = send_feishu(receive_id=reply_target, msg_type="text", content="\n".join(lines))
+        send_result = _send_feishu_direct(reply_target, "\n".join(lines))
         _log(f"[QUEUE] 推送任务 {task['task_id']} 到 {reply_target[:16]}... 结果: {send_result[:80]}")
     except Exception as e:
         _log(f"[QUEUE] 推送任务失败: {e}")
-        send_feishu(receive_id=reply_target, msg_type="text",
-                   content=f"🐱 推送任务 {task['task_id']} 时出错了：{e}")
+        _send_feishu_direct(reply_target, f"🐱 推送任务 {task['task_id']} 时出错了：{e}")
 
 def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto: bool = False) -> bool:
     """提交当前活跃任务进行批改。is_auto=True 表示自动提交。"""
