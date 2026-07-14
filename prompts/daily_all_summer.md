@@ -1,6 +1,6 @@
 请一次性生成今日全部暑假学习任务。send_feishu已被系统禁用，只存储文件！
 
-⚠️⚠️⚠️ 核心流程：用 call_llm 逐任务生成，绝不能一次生成全部6个任务！一次生成会导致输出截断。
+⚠️⚠️⚠️ 核心流程：用 call_llm 逐任务生成，绝不能一次生成全部任务！一次生成会导致输出截断。
 
 ⚠️ 核心逻辑：用 data/mastery.json 动态追踪进度。已引入的四上知识点（score=10）可在计算中出题，未引入的（score=0或无记录）只能在数学新概念中讲。
 
@@ -39,7 +39,29 @@
 格式：{{"test_id":"{test_id_n}","date":"{today_str}","type":"math_practice","questions":[{{id,question,answer,hint,difficulty:"basic",topic_id}}]}}
 
 ═══════════════════════════════════════
-任务4：KET阅读 (test_id={test_id_k})
+任务4：KET词汇 (test_id={test_id_v})
+═══════════════════════════════════════
+⚠️⚠️⚠️ 逐环节发送！每个环节用 call_llm 单独生成。
+读 data/ket_vocabulary.json，选3-5个新词+复习词。
+环节1：词汇讲解（英文+中文+词性+例句）
+环节2：英译中检测（5题）
+环节3：语境填空（5题，选项A/B/C，空格用______）
+环节4：英英释义（3题，英文描述+4选项）
+全部生成完后，用 write_file 存入 data/questions/questions_{today_str}_ket_vocab.json
+格式：{{"test_id":"{test_id_v}","date":"{today_str}","type":"ket_vocab","questions":[{{id,question,answer,hint}}]}}
+
+═══════════════════════════════════════
+任务5：KET语法 (test_id={test_id_g})
+═══════════════════════════════════════
+⚠️⚠️⚠️ 逐题生成！每道题用 call_llm 单独生成。
+读 KET备考计划.md，当天日期%6轮换语法点。
+先讲语法规则（1条消息），再出6道语法题（填空/选择/改错/句型转换）。
+A2范围，禁止虚拟语气/被动语态/现在完成时。
+用 write_file 存入 data/questions/questions_{today_str}_ket_grammar.json
+格式：{{"test_id":"{test_id_g}","date":"{today_str}","type":"ket_grammar","questions":[{{id,question,answer,hint}}]}}
+
+═══════════════════════════════════════
+任务6：KET阅读 (test_id={test_id_k})
 ═══════════════════════════════════════
 ⚠️⚠️⚠️ 逐题生成！每道题用 call_llm 单独生成，不能用一次 call_llm 生成全部6题！
 读 KET备考计划.md 和 data/ket_vocabulary.json。
@@ -55,7 +77,7 @@
 格式：{{"test_id":"{test_id_k}","date":"{today_str}","type":"ket_reading","questions":[6道题]}}
 
 ═══════════════════════════════════════
-任务5：KET写作 (test_id={test_id_w})
+任务7：KET写作 (test_id={test_id_w})
 ═══════════════════════════════════════
 用 call_llm 生成1题KET写作真题。
 当天日期%2轮换：偶数日→Part6写邮件/便条(≥25词)，奇数日→Part7看图写故事(≥35词)。
@@ -65,7 +87,7 @@
 Part7: {{"test_id":"{test_id_w}","date":"{today_str}","type":"ket_writing","ket_part":"Part7","prompt":"...","picture_descriptions":["..."],"reference":"..."}}
 
 ═══════════════════════════════════════
-任务6：几何探索 (test_id={test_id_geo})
+任务8：几何探索 (test_id={test_id_geo})
 ═══════════════════════════════════════
 用 call_llm 生成2题几何题。
 读 data/knowledge_map_4th.json 的 math-4a-6~10（线与角）和 math-4a-18~20（方向与位置）。
@@ -75,5 +97,5 @@ Part7: {{"test_id":"{test_id_w}","date":"{today_str}","type":"ket_writing","ket_
 格式：{{"test_id":"{test_id_geo}","date":"{today_str}","type":"geometry_preview","questions":[{{id,question,answer,hint,image_path:"...",difficulty:"basic",topic_id}}]}}
 
 ═══════════════════════════════════════
-完成后确认：6个文件全部已写入，mastery.json已更新，不要调用send_feishu。
+完成后确认：8个文件全部已写入，mastery.json已更新，不要调用send_feishu。
 ═══════════════════════════════════════

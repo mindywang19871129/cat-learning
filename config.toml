@@ -205,8 +205,28 @@ difficulty = "basic"
 output_file = "data/questions/questions_{today_str}_math_practice.json"
 
 [[tasks.summer]]
-type = "ket_reading"
+type = "ket_vocab"
 priority = 4
+title = "📚 KET词汇"
+question_count = 12
+prompt_file = "prompts/ket_vocab.md"
+prefix = "V"
+difficulty = "normal"
+output_file = "data/questions/questions_{today_str}_ket_vocab.json"
+
+[[tasks.summer]]
+type = "ket_grammar"
+priority = 5
+title = "📖 KET语法"
+question_count = 6
+prompt_file = "prompts/ket_grammar.md"
+prefix = "G"
+difficulty = "normal"
+output_file = "data/questions/questions_{today_str}_ket_grammar.json"
+
+[[tasks.summer]]
+type = "ket_reading"
+priority = 6
 title = "📖 KET阅读"
 question_count = 6
 prompt_file = "prompts/ket_reading.md"
@@ -216,7 +236,7 @@ output_file = "data/questions/questions_{today_str}_ket_reading.json"
 
 [[tasks.summer]]
 type = "ket_writing"
-priority = 5
+priority = 7
 title = "✏️ KET写作"
 question_count = 1
 prompt_file = "prompts/ket_writing.md"
@@ -226,11 +246,11 @@ output_file = "data/questions/questions_{today_str}_ket_writing.json"
 
 [[tasks.summer]]
 type = "geometry_preview"
-priority = 6
+priority = 8
 title = "📏 几何探索"
 question_count = 2
 prompt_file = "prompts/geometry_preview.md"
-prefix = "G"
+prefix = "E"
 difficulty = "basic"
 output_file = "data/questions/questions_{today_str}_geometry_preview.json"
 
