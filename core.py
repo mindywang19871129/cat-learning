@@ -456,7 +456,20 @@ if SILICONFLOW_API_KEY:
         "model": "Qwen/Qwen3-VL-32B-Instruct",
     })
 
-# 2. 火山方舟（需要 endpoint_id，模型名模式不可用）
+# 2. 豆包视觉（Doubao-Seed-2.0-pro，手写识别强，需要火山API Key）
+DOUBAO_VISION_API_KEY = os.environ.get("DOUBAO_VISION_API_KEY", API_KEY)
+DOUBAO_VISION_MODEL = os.environ.get("DOUBAO_VISION_MODEL", "doubao-seed-2.0-pro-251015")
+# 检测是否使用了火山引擎 API（Key 格式为 uuid 非 sk- 开头）
+_is_volc_key = bool(DOUBAO_VISION_API_KEY and not DOUBAO_VISION_API_KEY.startswith("sk-"))
+if _is_volc_key:
+    VISION_APIS.append({
+        "name": "doubao_vision",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "api_key": DOUBAO_VISION_API_KEY,
+        "model": DOUBAO_VISION_MODEL,
+    })
+
+# 3. 火山方舟（需要 endpoint_id，模型名模式不可用）
 VOLC_ENDPOINT_ID = os.environ.get("VOLC_ENDPOINT_ID", "")
 if API_KEY and "volces.com" in BASE_URL and VOLC_ENDPOINT_ID:
     VISION_APIS.append({
@@ -466,7 +479,7 @@ if API_KEY and "volces.com" in BASE_URL and VOLC_ENDPOINT_ID:
         "model": VOLC_ENDPOINT_ID,
     })
 
-# 3. OpenAI兼容API（如通义千问、智谱等）
+# 4. OpenAI兼容API（如通义千问、智谱等）
 OPENAI_VISION_API_KEY = os.environ.get("OPENAI_VISION_API_KEY", "")
 OPENAI_VISION_BASE_URL = os.environ.get("OPENAI_VISION_BASE_URL", "")
 OPENAI_VISION_MODEL = os.environ.get("OPENAI_VISION_MODEL", "gpt-4o-mini")
