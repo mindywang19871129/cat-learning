@@ -446,7 +446,16 @@ def ocr_image(image_path: str) -> str:
 # 视觉API配置（按优先级尝试）
 VISION_APIS = []
 
-# 1. 硅基流动（免费注册送14元，Qwen3-VL手写识别强，优先）
+# 1. 火山引擎 coding 端点（DeepSeek-V4-Flash 支持视觉，用当前主API Key）
+if API_KEY and "volces.com" in BASE_URL:
+    VISION_APIS.append({
+        "name": "volcengine_flash_vision",
+        "base_url": BASE_URL,
+        "api_key": API_KEY,
+        "model": MODEL,
+    })
+
+# 2. 硅基流动（免费注册送14元，Qwen3-VL手写识别强，优先）
 SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "")
 if SILICONFLOW_API_KEY:
     VISION_APIS.append({
@@ -456,10 +465,10 @@ if SILICONFLOW_API_KEY:
         "model": "Qwen/Qwen3-VL-32B-Instruct",
     })
 
-# 2. 火山方舟 Doubao-1.5-vision-pro-32k（备选，需额外付费）
+# 3. 火山方舟 Doubao-1.5-vision-pro-32k（备选，需额外付费）
 VOLC_API_KEY = os.environ.get("VOLC_API_KEY", "")
 VOLC_ENDPOINT_ID = os.environ.get("VOLC_ENDPOINT_ID", "")
-if VOLC_API_KEY:
+if VOLC_API_KEY and VOLC_API_KEY != API_KEY:
     model_id = VOLC_ENDPOINT_ID if VOLC_ENDPOINT_ID else "doubao-1.5-vision-pro-32k"
     VISION_APIS.append({
         "name": "volcengine_doubao",
@@ -468,7 +477,7 @@ if VOLC_API_KEY:
         "model": model_id,
     })
 
-# 3. OpenAI兼容API（如通义千问、智谱等）
+# 4. OpenAI兼容API（如通义千问、智谱等）
 OPENAI_VISION_API_KEY = os.environ.get("OPENAI_VISION_API_KEY", "")
 OPENAI_VISION_BASE_URL = os.environ.get("OPENAI_VISION_BASE_URL", "")
 OPENAI_VISION_MODEL = os.environ.get("OPENAI_VISION_MODEL", "gpt-4o-mini")
