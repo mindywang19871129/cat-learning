@@ -905,6 +905,8 @@ def _get_feishu_token() -> str:
             "expires_at": time.time() + data.get("expire", 7200),
         }
         return _feishu_token["token"]
+    sys.stderr.write(f"[FEISHU] ❌ API返回错误: code={data.get('code')} msg={data.get('msg','')} url={FEISHU_BASE}/auth/v3/tenant_access_token/internal\n")
+    sys.stderr.flush()
     return ""
 
 
