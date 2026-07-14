@@ -52,6 +52,11 @@ def _load_dotenv():
                 if line and not line.startswith("#") and "=" in line:
                     k, _, v = line.partition("=")
                     os.environ[k.strip()] = v.strip()  # 强制覆盖，不用setdefault
+        sys.stderr.write(f"[DOTENV] 已加载 .env: HOME={HOME}, FEISHU_APP_ID={'SET' if os.environ.get('FEISHU_APP_ID') else 'EMPTY'}\n")
+        sys.stderr.flush()
+    else:
+        sys.stderr.write(f"[DOTENV] ⚠️ .env 不存在: {env_file}\n")
+        sys.stderr.flush()
 
 _load_dotenv()
 
@@ -875,6 +880,8 @@ def _get_feishu_token() -> str:
         FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "")
     # 最终兜底：直接读取 .env 文件
     if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
+        sys.stderr.write(f"[FEISHU] 🔄 密钥为空，尝试从 .env 兜底读取 HOME={HOME}\n")
+        sys.stderr.flush()
         try:
             env_file = HOME / ".env"
             if env_file.exists():
@@ -886,8 +893,14 @@ def _get_feishu_token() -> str:
                             FEISHU_APP_ID = v.strip()
                         elif k.strip() == "FEISHU_APP_SECRET":
                             FEISHU_APP_SECRET = v.strip()
-        except Exception:
-            pass
+                sys.stderr.write(f"[FEISHU] 兜底读取结果: APP_ID={'SET' if FEISHU_APP_ID else 'EMPTY'} SECRET={'SET' if FEISHU_APP_SECRET else 'EMPTY'}\n")
+                sys.stderr.flush()
+            else:
+                sys.stderr.write(f"[FEISHU] ⚠️ .env 文件不存在: {env_file}\n")
+                sys.stderr.flush()
+        except Exception as ex:
+            sys.stderr.write(f"[FEISHU] ❌ .env 兜底读取异常: {type(ex).__name__}: {ex}\n")
+            sys.stderr.flush()
     if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
         sys.stderr.write(f"[FEISHU] ❌ 密钥为空 APP_ID={'SET' if FEISHU_APP_ID else 'EMPTY'} SECRET={'SET' if FEISHU_APP_SECRET else 'EMPTY'}\n")
         sys.stderr.flush()
