@@ -398,8 +398,8 @@ def _push_task_to_feishu(task: dict, reply_target: str):
         lines.append("发完所有图片后回复「提交」开始批改。")
         lines.append("🐱 加油！")
         
-        send_feishu(receive_id=reply_target, msg_type="text", content="\n".join(lines))
-        _log(f"[QUEUE] 推送任务 {task['task_id']} 到 {reply_target[:16]}...")
+        send_result = send_feishu(receive_id=reply_target, msg_type="text", content="\n".join(lines))
+        _log(f"[QUEUE] 推送任务 {task['task_id']} 到 {reply_target[:16]}... 结果: {send_result[:80]}")
     except Exception as e:
         _log(f"[QUEUE] 推送任务失败: {e}")
         send_feishu(receive_id=reply_target, msg_type="text",

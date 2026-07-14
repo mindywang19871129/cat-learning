@@ -865,10 +865,17 @@ FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "")
 
 def _get_feishu_token() -> str:
     """获取飞书 tenant_access_token（带缓存）。"""
-    global _feishu_token
+    global _feishu_token, FEISHU_APP_ID, FEISHU_APP_SECRET
     if _feishu_token["token"] and time.time() < _feishu_token["expires_at"] - 60:
         return _feishu_token["token"]
+    # 兜底：如果模块变量为空，重新从 os.environ 读取（可能被 _load_dotenv 后设置）
+    if not FEISHU_APP_ID:
+        FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID", "")
+    if not FEISHU_APP_SECRET:
+        FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "")
     if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
+        sys.stderr.write(f"[FEISHU] ❌ 密钥为空 APP_ID={'SET' if FEISHU_APP_ID else 'EMPTY'}\n")
+        sys.stderr.flush()
         return ""
     import requests
     resp = requests.post(
