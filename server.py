@@ -1292,6 +1292,12 @@ def _can_scheduled_push_today(is_manual: bool = False):
     except Exception:
         return True, "文件读取失败，按无题目处理"
 
+    # 兼容空列表格式（清空队列后写入的 []）
+    if isinstance(data, list):
+        return True, "题目文件为空列表，按无题目处理"
+    if not isinstance(data, dict):
+        return True, "题目文件格式异常，按无题目处理"
+
     file_date = data.get("date", "")
     math = data.get("math", [])
     english = data.get("english", [])
