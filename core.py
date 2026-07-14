@@ -65,6 +65,20 @@ _load_dotenv()
 with open(HOME / "config.toml", "rb") as _f:
     CFG = tomllib.load(_f)
 
+# ─── 启动时配置校验（防止config.toml被手动改错） ───
+_fs_base = CFG.get("feishu", {}).get("base_url", "")
+if _fs_base and "open.feishu.cn" not in _fs_base:
+    sys.stderr.write(f"[CONFIG] ❌ 致命错误: [feishu].base_url = {_fs_base!r} → 已篡改，正确值: https://open.feishu.cn/open-apis\n")
+    sys.stderr.write(f"[CONFIG] ⚠️  服务器上执行 git checkout config.toml 恢复正确配置\n")
+    sys.stderr.flush()
+    sys.exit(1)
+# api base_url 校验：必须是火山引擎或deepseek官方地址
+_api_base = CFG.get("api", {}).get("base_url", "")
+if _api_base and "open.feishu.cn" in _api_base:
+    sys.stderr.write(f"[CONFIG] ❌ 致命错误: [api].base_url = {_api_base!r} → 被篡改为飞书地址，正确值: https://ark.cn-beijing.volces.com/api/coding/v3\n")
+    sys.stderr.flush()
+    sys.exit(1)
+
 MODEL = CFG["api"]["model"]
 REASONING_MODEL = CFG["api"].get("reasoning_model", MODEL)
 BASE_URL = CFG["api"]["base_url"]
@@ -863,7 +877,8 @@ def find_questions(date_hint: str = "") -> str:
 
 # 飞书 access_token 缓存
 _feishu_token = {"token": "", "expires_at": 0.0}
-FEISHU_BASE = CFG.get("feishu", {}).get("base_url", "https://open.feishu.cn/open-apis")
+# 飞书API地址是固定的，硬编码防止被config.toml误改（曾因服务器手动改config.toml导致base_url变成火山引擎地址）
+FEISHU_BASE = "https://open.feishu.cn/open-apis"
 FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID", "")
 FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "")
 
