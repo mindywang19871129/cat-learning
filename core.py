@@ -633,9 +633,10 @@ def enhanced_ocr_image(image_path: str, use_llm_vision: bool = True) -> str:
     
     # 1. 优先使用LLM视觉（如果可用）
     if use_llm_vision and VISION_APIS:
-        # 根据引擎选择最优 prompt
         engine_name = VISION_APIS[0]["name"]
-        if "doubao" in engine_name:
+        if not VISION_APIS[0].get("api_key"):
+            print(f"[OCR-VISION] ⚠️ API Key为空，跳过视觉API")
+        elif "doubao" in engine_name:
             vision_prompt = (
                 "你是一个专业的手写体识别助手。请仔细识别图片中所有手写文字和数字。\n\n"
                 "这是小学生手写的数学/英语/词汇作业答案。\n\n"
