@@ -9,54 +9,40 @@ test_id = "{test_id}"
 2. 读取 data/ket_vocabulary.json → 确保词汇在KET词表内
 3. 读取 data/error_book.json → 筛选英语错题
 
-出题（6题，按KET真题格式，每天轮换题型组合）：
-
-按当天日期取模轮换：
+按当天日期取模确定题型组合：
 - 日期%3==0：短信息匹配3题(Part1) + 长文选择3题(Part3)
 - 日期%3==1：短文匹配3题(Part2) + 完形填空3题(Part4)
 - 日期%3==2：开放式完形3题(Part5) + 长文选择3题(Part3)
 
-⚠️⚠️⚠️ 【核心流程·防截断】逐题生成，不能一次生成6题！
-一次生成6题会导致输出过长被截断。必须逐题用 call_llm 生成：
+⚠️⚠️⚠️ 【核心流程·逐题出题】每次只生成并发送1道题，绝不能一次出6题！
 
 ```
-① 先确定6道题的题型和主题（在脑中规划）
-② 对第1题：用 call_llm 生成（含完整原文），拿到结果后存到临时变量
-③ 对第2题：用 call_llm 生成（含完整原文），拿到结果后存到临时变量
-④ ...依次生成第3、4、5、6题
-⑤ 把6题结果组装成完整 questions 数组
-⑥ 用 write_file 存入 {output_file}
+① 用 call_llm 生成第1题（含完整原文）→ send_feishu(msg_type="text") 发送第1题
+② 用 call_llm 生成第2题（含完整原文）→ send_feishu(msg_type="text") 发送第2题
+③ 用 call_llm 生成第3题（含完整原文）→ send_feishu(msg_type="text") 发送第3题
+④ 用 call_llm 生成第4题（含完整原文）→ send_feishu(msg_type="text") 发送第4题
+⑤ 用 call_llm 生成第5题（含完整原文）→ send_feishu(msg_type="text") 发送第5题
+⑥ 用 call_llm 生成第6题（含完整原文）→ send_feishu(msg_type="text") 发送第6题
+⑦ 把所有6题结果组装成 questions 数组，write_file 存入 {output_file}
 ```
 
-每次 call_llm 的 prompt 格式：
-"请生成一道KET阅读真题：
+每次 call_llm 的 prompt：
+"请生成一道KET阅读真题（只生成1道题，不要生成多道）：
 题型：{Part1/2/3/4/5}
-要求：{具体题型要求}
 词汇范围：KET核心词表 ~1500词
-请输出JSON格式：{{id,question,answer,hint,ket_part,topic_id}}
-⚠️ question字段必须包含完整原文，禁止截断，禁止用...省略"
+输出JSON格式：{{"id":"","question":"完整原文+题目指令","answer":"","hint":"","ket_part":"","topic_id":""}}
+⚠️ question字段必须包含完整原文，禁止用...截断！"
 
-⚠️⚠️⚠️ KET真题格式要求（每条都是铁律，缺一不可）：
-- 题材：邮件、通知、广告、短文、故事（KET真实场景）
-- 词汇：严格KET词表(~1500词)，不用超纲词
-- 选项：用A/B/C，不要用1/2/3
-- 短文长度：50-150词
+⚠️⚠️⚠️ 格式要求：
+- 每道题的question字段必须包含完整原文（告示全文/短文全文/长文全文/完形全文）
+- Part1：完整告示/通知/邮件原文 + 匹配题
+- Part2：3篇完整短文原文（每篇50-80词）+ 匹配题
+- Part3：完整长文原文（150-200词）+ 选择题
+- Part4/5：完整文章，空格用______（6个下划线），选项列在题号下方
+- 选项用A/B/C
+- 每道题标注KET真题Part编号
+- 用 send_feishu(msg_type="text") 文本消息发送，禁止用卡片消息
 
-⚠️⚠️⚠️ 【铁律·零容忍】每道题必须包含完整阅读原文！禁止只出选项不出文章！
-- Part1（短信息匹配）：必须给出完整告示/通知/邮件/标签的原文，然后出匹配题
-- Part2（短文匹配）：必须给出3篇完整短文原文，每篇50-80词
-- Part3（长文选择）：必须给出完整长文原文，150-250词
-- Part4（完形填空）：原文完整呈现，空格用______（6个下划线），选项列在题号下方
-- Part5（开放式完形）：原文完整呈现，每空______（无选项，学生自己填）
+最终存入格式：{{"test_id":"{test_id}","date":"{today_str}","type":"ket_reading","questions":[6道题]}}
 
-⚠️ question字段里必须包含完整原文+题目指令，不能只写"阅读短文选答案"但没有短文！
-⚠️ 所有文本必须完整写出，禁止用"..."截断！禁止用"等"省略！禁止用"略"跳过！
-
-⚠️⚠️⚠️ 推送格式：用 send_feishu(msg_type="text") 文本消息发送，禁止用卡片消息！文本消息最多30KB确保完整原文不截断。
-
-- 每道题标注对应KET真题Part编号
-
-用 write_file 存入 {output_file}
-格式：{{"test_id":"{test_id}","date":"{today_str}","type":"ket_reading","questions":[{{id,question,answer,hint,ket_part:"Part1/2/3/4/5",topic_id}}]}}
-
-⚠️ 只存储，不要调用 send_feishu！（已被系统禁用）
+⚠️ 铁律：每次只生成1道题，发完再生成下一道！
