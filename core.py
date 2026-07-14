@@ -446,17 +446,7 @@ def ocr_image(image_path: str) -> str:
 # 视觉API配置（按优先级尝试）
 VISION_APIS = []
 
-# 1. 硅基流动（免费注册送14元，Qwen3-VL手写识别强，优先）
-SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "")
-if SILICONFLOW_API_KEY:
-    VISION_APIS.append({
-        "name": "siliconflow",
-        "base_url": "https://api.siliconflow.cn/v1",
-        "api_key": SILICONFLOW_API_KEY,
-        "model": "Qwen/Qwen3-VL-32B-Instruct",
-    })
-
-# 2. 豆包视觉（Doubao-Seed-2.0-pro，手写识别强，需要火山API Key）
+# 1. 豆包视觉（Doubao-Seed-2.0-pro，手写识别强，同Key无需额外付费）
 DOUBAO_VISION_API_KEY = os.environ.get("DOUBAO_VISION_API_KEY", API_KEY)
 DOUBAO_VISION_MODEL = os.environ.get("DOUBAO_VISION_MODEL", "doubao-seed-2.0-pro-251015")
 # 检测是否使用了火山引擎 API（Key 格式为 uuid 非 sk- 开头）
@@ -467,6 +457,16 @@ if _is_volc_key:
         "base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "api_key": DOUBAO_VISION_API_KEY,
         "model": DOUBAO_VISION_MODEL,
+    })
+
+# 2. 硅基流动（已有余额时使用，Qwen3-VL手写识别强）
+SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "")
+if SILICONFLOW_API_KEY:
+    VISION_APIS.append({
+        "name": "siliconflow",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "api_key": SILICONFLOW_API_KEY,
+        "model": "Qwen/Qwen3-VL-32B-Instruct",
     })
 
 # 3. 火山方舟（需要 endpoint_id，模型名模式不可用）
