@@ -900,6 +900,16 @@ def _handle_queue_command(text: str, sender_id: str, chat_id: str, reply_target:
                                    content="🐱 正在批改中，请稍等几秒...")
                         return True
                     if st == "in_progress":
+                        # 概念讲解任务（0题）可以直接跳过
+                        if t.get("type") in ("math_preview",):
+                            t["status"] = "graded"
+                            t["graded_at"] = datetime.now().isoformat()
+                            q["active_task_id"] = None
+                            q["mode"] = "idle"
+                            _save_learning_queue(q)
+                            send_feishu(receive_id=reply_target, msg_type="text",
+                                       content=f"✅ 概念讲解已看完，自动进入下一项练习～")
+                            break
                         send_feishu(receive_id=reply_target, msg_type="text",
                                    content=f"🐱 当前任务 {active_id} 正在进行中，请完成后说「提交」")
                         return True
