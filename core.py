@@ -906,6 +906,8 @@ def send_feishu(receive_id: str, msg_type: str, content: str) -> str:
     import requests
     token = _get_feishu_token()
     if not token:
+        sys.stderr.write(f"[FEISHU_SEND] ❌ token为空, APP_ID={FEISHU_APP_ID[:10] if FEISHU_APP_ID else 'EMPTY'}...\n")
+        sys.stderr.flush()
         return "ERROR: 飞书未配置（FEISHU_APP_ID/FEISHU_APP_SECRET 未设置）"
 
     # 自动识别 receive_id 类型
@@ -973,12 +975,15 @@ def send_feishu(receive_id: str, msg_type: str, content: str) -> str:
         data = resp.json()
         if data.get("code") == 0:
             msg_id = data.get('data',{}).get('message_id','')
-            print(f"[FEISHU_SEND] ✅ 消息已发送: receive_id={receive_id[:16]}... msg_id={msg_id[:16]}...")
+            sys.stderr.write(f"[FEISHU_SEND] ✅ 已发送: receive_id={receive_id[:16]}... msg_id={msg_id[:16]}...\n")
+            sys.stderr.flush()
             return f"OK: 飞书消息已发送 (message_id={msg_id})"
-        print(f"[FEISHU_SEND] ❌ 发送失败: code={data.get('code')} msg={data.get('msg','')}")
+        sys.stderr.write(f"[FEISHU_SEND] ❌ 发送失败: code={data.get('code')} msg={data.get('msg','')}\n")
+        sys.stderr.flush()
         return f"ERROR: 飞书发送失败 code={data.get('code')} msg={data.get('msg','')}"
     except Exception as e:
-        print(f"[FEISHU_SEND] ❌ 异常: {e}")
+        sys.stderr.write(f"[FEISHU_SEND] ❌ 异常: {e}\n")
+        sys.stderr.flush()
         return f"ERROR: 飞书发送异常: {e}"
 
 
