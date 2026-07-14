@@ -711,6 +711,12 @@ send_feishu(receive_id="ou_xxx", msg_type="interactive", content='{"config":{"wi
 - 批改结果卡片：header green，每题评价+鼓励语
 - 模考卡片：header blue，含时间限制和注意事项
 
+**⚠️⚠️⚠️ KET阅读题推送格式（铁律）**：
+- KET阅读题必须用 `send_feishu(msg_type="text")` 文本消息发送，**禁止用卡片消息**！
+- 原因：卡片消息有字符限制会截断长文，文本消息最多30KB，确保完整原文不丢失
+- 格式：先发一条文本消息列出所有题目（含完整原文），再发一条简短卡片提醒"完成后回复「提交」"
+- 数学题可以继续用卡片，阅读题必须用文本消息
+
 **重要**：receive_id 从 `[系统上下文：飞书用户 sender_open_id=xxx]` 中获取。
 如果是每日推送任务，推送目标 chat_id 会直接在指令中提供（以 `oc_` 开头），直接使用。send_feishu 会自动识别 ID 类型。
 
