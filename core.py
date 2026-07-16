@@ -465,9 +465,9 @@ def ocr_image(image_path: str) -> str:
 # 视觉API配置（按优先级尝试）
 VISION_APIS = []
 
-# 1. 豆包视觉（Doubao-Seed-2.0-pro，手写识别强，同Key无需额外付费）
+# 1. 豆包视觉（Doubao-1.5-Vision-Pro，手写识别强，同Key无需额外付费）
 DOUBAO_VISION_API_KEY = os.environ.get("DOUBAO_VISION_API_KEY", API_KEY)
-DOUBAO_VISION_MODEL = os.environ.get("DOUBAO_VISION_MODEL", "doubao-seed-2.0-pro-251015")
+DOUBAO_VISION_MODEL = os.environ.get("DOUBAO_VISION_MODEL", "doubao-1.5-vision-pro-32k")
 # 检测是否使用了火山引擎 API（Key 格式为 uuid 非 sk- 开头）
 _is_volc_key = bool(DOUBAO_VISION_API_KEY and not DOUBAO_VISION_API_KEY.startswith("sk-"))
 if _is_volc_key:
