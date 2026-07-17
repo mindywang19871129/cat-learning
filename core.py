@@ -924,7 +924,7 @@ def _get_feishu_token() -> str:
     resp = requests.post(
         f"{FEISHU_BASE}/auth/v3/tenant_access_token/internal",
         json={"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET},
-        timeout=10,
+        timeout=30,  # 之前10s频繁超时，改为30s
     )
     data = resp.json()
     if data.get("code") == 0:
@@ -1022,7 +1022,7 @@ def send_feishu(receive_id: str, msg_type: str, content: str) -> str:
             f"{FEISHU_BASE}/im/v1/messages?receive_id_type={id_type}",
             headers=headers,
             json=body,
-            timeout=10,
+            timeout=30,  # 之前10s频繁超时
         )
         data = resp.json()
         if data.get("code") == 0:
