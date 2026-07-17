@@ -1280,7 +1280,7 @@ def _can_scheduled_push_today(is_manual: bool = False):
     q = _load_learning_queue()
     pending = [t for t in q.get("queue", []) if t.get("status") in ("pending", "in_progress", "image_received", "submitted")]
     if pending:
-        return False, f"学习队列中还有 {len(pending)} 项任务未完成，先完成再出新题"
+        return True, f"队列有 {len(pending)} 项待推送/进行中任务"  # 允许推送已有任务，不生成新题
 
     today_file = DATA_DIR / "today_questions.json"
 
