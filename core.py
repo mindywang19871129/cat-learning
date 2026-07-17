@@ -291,7 +291,7 @@ def _recognize_via_feishu(p: Path) -> dict | None:
     except Exception:
         return None
 
-    max_retries = 2  # 减少重试次数，避免阻塞轮询
+    max_retries = 1  # 不重试，遇到频率限制直接降级ocr.space（飞书免费额度有限）
     for attempt in range(max_retries):
         try:
             resp = requests.post(
