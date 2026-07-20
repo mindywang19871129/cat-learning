@@ -554,41 +554,48 @@ def analyze_image_via_llm(image_path: str, prompt: str = "请识别图片中的�
     except Exception as e:
         return json.dumps({"success": False, "error": f"读取图片失败: {e}"}, ensure_ascii=False)
     
-    # 按优先级尝试各视觉API
+    # 按优先级尝试各视觉API（每个API 429 自动重试1次）
     errors = []
     for api_config in VISION_APIS:
-        try:
-            vision_client = OpenAI(api_key=api_config["api_key"], base_url=api_config["base_url"])
-            # Doubao vision 用低温度提高手写识别准确率
-            is_doubao = "doubao" in api_config.get("name", "")
-            resp = vision_client.chat.completions.create(
-                model=api_config["model"],
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}}
-                        ]
-                    }
-                ],
-                max_tokens=2000 if is_doubao else 1000,
-                temperature=0.1 if is_doubao else 0.3,
-            )
-            analysis = resp.choices[0].message.content or ""
-            
-            return json.dumps({
-                "success": True,
-                "engine": f"llm_vision_{api_config['name']}",
-                "analysis": analysis,
-                "text": analysis,
-                "confidence_hint": "high",
-                "raw_lines": [line.strip() for line in analysis.split("\n") if line.strip()],
-            }, ensure_ascii=False)
-        except Exception as e:
-            print(f"[OCR-VISION] {api_config['name']} 失败: {e}")
-            errors.append(f"{api_config['name']}: {e}")
-            continue
+        for attempt in range(2):  # 最多2次尝试
+            try:
+                vision_client = OpenAI(api_key=api_config["api_key"], base_url=api_config["base_url"])
+                # Doubao vision 用低温度提高手写识别准确率
+                is_doubao = "doubao" in api_config.get("name", "")
+                resp = vision_client.chat.completions.create(
+                    model=api_config["model"],
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}}
+                            ]
+                        }
+                    ],
+                    max_tokens=2000 if is_doubao else 1000,
+                    temperature=0.1 if is_doubao else 0.3,
+                )
+                analysis = resp.choices[0].message.content or ""
+                
+                return json.dumps({
+                    "success": True,
+                    "engine": f"llm_vision_{api_config['name']}",
+                    "analysis": analysis,
+                    "text": analysis,
+                    "confidence_hint": "high",
+                    "raw_lines": [line.strip() for line in analysis.split("\n") if line.strip()],
+                }, ensure_ascii=False)
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
+                    if attempt == 0:
+                        print(f"[OCR-VISION] {api_config['name']} 429, retry in 5s...")
+                        time.sleep(5)
+                        continue
+                print(f"[OCR-VISION] {api_config['name']} 失败: {e}")
+                errors.append(f"{api_config['name']}: {e}")
+                break
     
     return json.dumps({
         "success": False, 
