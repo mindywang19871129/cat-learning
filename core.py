@@ -207,16 +207,29 @@ def ask_user(question: str, _on_ask_user=None) -> str:
 
 # ─── 工具 7：LLM 子调用 ─────────────────────────────────────────────
 
-def call_llm(prompt: str, system: str = "") -> str:
-    """隔离的 LLM 子调用，不影响主对话历史。复杂任务用推理模型保证质量。"""
+def call_llm(prompt: str, system: str = "", max_retries: int = 3) -> str:
+    """隔离的 LLM 子调用，不影响主对话历史。复杂任务用推理模型保证质量。
+    429 限流自动重试（指数退避 10s/20s/40s）。"""
     msgs = []
     if system:
         msgs.append({"role": "system", "content": system})
     msgs.append({"role": "user", "content": prompt})
-    resp = CLIENT.chat.completions.create(
-        model=REASONING_MODEL, messages=msgs, stream=False,
-    )
-    return resp.choices[0].message.content or ""
+
+    for attempt in range(max_retries):
+        try:
+            resp = CLIENT.chat.completions.create(
+                model=REASONING_MODEL, messages=msgs, stream=False,
+            )
+            return resp.choices[0].message.content or ""
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
+                if attempt < max_retries - 1:
+                    wait = (attempt + 1) * 10
+                    print(f"[LLM] 429 rate limit, retry in {wait}s (attempt {attempt+1}/{max_retries})")
+                    time.sleep(wait)
+                    continue
+            raise
 
 
 # ─── 工具 8：联网搜索 ───────────────────────────────────────────────
@@ -1448,11 +1461,23 @@ def dispatch(name: str, args_json: str, on_ask_user=None) -> str:
 
 # ─── LLM 流式调用 ───────────────────────────────────────────────────
 
-def llm_call_streaming(messages, tools, on_chunk=None):
-    response = CLIENT.chat.completions.create(
-        model=MODEL, messages=messages, tools=tools, stream=True,
-        # 日常对话用快速模型，复杂子任务由 call_llm 用推理模型处理
-    )
+def llm_call_streaming(messages, tools, on_chunk=None, max_retries=3):
+    """流式 LLM 调用。429 限流自动重试（指数退避 10s/20s/40s）。"""
+    for attempt in range(max_retries):
+        try:
+            response = CLIENT.chat.completions.create(
+                model=MODEL, messages=messages, tools=tools, stream=True,
+            )
+            break
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
+                if attempt < max_retries - 1:
+                    wait = (attempt + 1) * 10
+                    print(f"[LLM-STREAM] 429 rate limit, retry in {wait}s (attempt {attempt+1}/{max_retries})")
+                    time.sleep(wait)
+                    continue
+            raise
     content_parts = []
     reasoning_parts = []
     tc_acc: dict[int, dict] = {}

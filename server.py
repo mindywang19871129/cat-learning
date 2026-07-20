@@ -629,8 +629,29 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
 
         except Exception as e:
             _log(f"[QUEUE] 批改异常: {e}")
-            send_feishu(receive_id=reply_target, msg_type="text",
-                       content=f"🐱 批改时出错了：{e}")
+            _log(traceback.format_exc())
+            err_str = str(e)
+            # 重置任务状态为 in_progress，用户可以重新提交
+            q3 = _load_learning_queue()
+            for t in q3.get("queue", []):
+                if t["task_id"] == task["task_id"]:
+                    t["status"] = "in_progress"
+                    t.pop("submitted_at", None)
+                    break
+            _save_learning_queue(q3)
+            if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
+                # 提取重置时间
+                reset_hint = ""
+                if "reset at" in err_str:
+                    import re
+                    m = re.search(r'reset at (.+?)[\.\s]', err_str)
+                    if m:
+                        reset_hint = f"，预计 {m.group(1)} 恢复"
+                send_feishu(receive_id=reply_target, msg_type="text",
+                           content=f"🐱 API 调用频率限制{reset_hint}。\n你的答案图片已保存，稍后回复「提交」即可重新批改～")
+            else:
+                send_feishu(receive_id=reply_target, msg_type="text",
+                           content=f"🐱 批改时出错了，你的答案图片已保存。\n请稍后回复「提交」重新批改～\n\n错误信息：{e}")
 
     threading.Thread(target=_grade_task, daemon=True).start()
     if is_auto:
@@ -1976,6 +1997,15 @@ def scheduled_pre_generate():
     except Exception as e:
         _log(f"[SCHEDULER] 预生成失败: {e}")
         _log(traceback.format_exc())
+        err_str = str(e)
+        if "429" not in err_str and "quota" not in err_str.lower() and "rate" not in err_str.lower():
+            # 非限流错误才通知飞书，限流已由 retry 处理
+            for chat_id in poll_cfg.get("chat_ids", []):
+                try:
+                    send_feishu(receive_id=chat_id, msg_type="text",
+                               content=f"🐱 凌晨预生成出错了：{e}")
+                except:
+                    pass
     finally:
         _SCHEDULED_PUSH_LOCK.release()
 
@@ -2109,6 +2139,15 @@ def scheduled_daily_push(is_manual: bool = False):
         if _saved_schema:
             _core_mod.TOOL_SCHEMAS.append(_saved_schema)
         _log(f"[SCHEDULER] ====== 每日推送失败: {e} ======")
+        _log(traceback.format_exc())
+        err_str = str(e)
+        if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
+            for chat_id in poll_cfg.get("chat_ids", []):
+                try:
+                    send_feishu(receive_id=chat_id, msg_type="text",
+                               content=f"🐱 出题时遇到 API 频率限制，已自动重试。\n如果仍未收到任务，请稍后回复「出题」重试～")
+                except:
+                    pass
         _log(traceback.format_exc())
     finally:
         _SCHEDULED_PUSH_LOCK.release()
