@@ -534,11 +534,40 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
             elif task_type_hint == "ket_writing": task_topic = "KET写作"
             elif task_type_hint == "geometry_preview": task_topic = "几何探索"
             
+            # ── 根据任务类型构建批改提示 ──
+            grading_hints = ""
+            if task_type_hint in ("geometry", "geometry_preview", "math_practice"):
+                grading_hints = (
+                    "⚠️ 几何题批改规则：\n"
+                    "- 角度测量题：允许±1°误差（如标准答案30°，学生答29°或31°也算对）\n"
+                    "- OCR识别角度的常见错误：30°→3O°或300, 90°→9O°或go°, 120°→12O°或I2O°\n"
+                    "- 如果OCR识别结果明显是角度被误识别（如3O°→修正为30°），先修正再批改\n"
+                    "- 角度名称题（锐角/直角/钝角）：学生可能写拼音或缩写，语义对即可\n"
+                    "- 量角器使用题：步骤描述对即可，不要求逐字匹配\n\n"
+                )
+            elif task_type_hint in ("vocab", "ket_vocab", "grammar", "ket_grammar"):
+                grading_hints = (
+                    "⚠️ 选择题/词汇题批改规则：\n"
+                    "- 标准答案格式如「B. apple」→ 学生答「B」「选B」「apple」「b」都算对\n"
+                    "- 学生打字答案如「选B」「选b」「B选项」「答案是B」→ 提取字母后匹配\n"
+                    "- 大小写不敏感：B和b视为相同\n"
+                    "- 如果学生只写了选项字母没写单词内容，只要字母匹配就算对\n"
+                    "- 词汇题：学生答中文释义或英文单词都算对（如apple→苹果, 苹果→apple）\n\n"
+                )
+            elif task_type_hint in ("ket_reading",):
+                grading_hints = (
+                    "⚠️ KET阅读题批改规则：\n"
+                    "- 选择题格式同词汇题（B/b/选B都算对）\n"
+                    "- 填空题：拼写小错误不扣分（如recieve→receive），语义对即可\n"
+                    "- 判断题：True/T/对/✓ 都算对，False/F/错/✗ 都算对\n\n"
+                )
+            
             result = run(
                 f"[系统上下文：飞书用户 sender_open_id={sender_id}, 回复目标ID={reply_target}]\n"
                 f"学生提交了任务 {task['task_id']} 的手写答案图片，OCR识别结果如下：\n\n"
                 f"{ocr_text}\n\n"
                 f"试卷题目和标准答案：\n{qs_summary}\n\n"
+                f"{grading_hints}"
                 f"{auto_hint}"
                 f"请逐题批改（✅/❌ + 解析），更新mastery/error_book。\n\n"
                 f"⚠️ 自适应难度规则（root.md第9节）：\n"
@@ -2133,8 +2162,20 @@ def scheduled_daily_push(is_manual: bool = False):
 
 
 def scheduled_weekly_test():
-    """每周日综合测试：复习本周错题+新内容+词汇检测。"""
+    """每周日综合测试：复习本周错题+新内容+词汇检测。队列未完成则跳过。"""
     _log(f"[SCHEDULER] 执行每周综合测试: {datetime.now()}")
+    
+    # ── 检查学习队列是否已全部完成 ──
+    q = _load_learning_queue()
+    pending = [t for t in q.get("queue", []) if t.get("status") in ("pending", "in_progress", "image_received", "submitted")]
+    if pending:
+        _log(f"[SCHEDULER] ⛔ 跳过每周综合测试：学习队列中还有 {len(pending)} 项未完成")
+        # 通知飞书
+        poll_cfg = CFG.get("feishu", {}).get("poll", {})
+        for chat_id in poll_cfg.get("chat_ids", []):
+            send_feishu(receive_id=chat_id, msg_type="text",
+                       content=f"🐱 本周还有 {len(pending)} 项学习任务未完成，综合测试自动推迟，完成所有任务后再来～")
+        return
     
     poll_cfg = CFG.get("feishu", {}).get("poll", {})
     target_chat_ids = poll_cfg.get("chat_ids", [])
