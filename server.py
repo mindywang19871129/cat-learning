@@ -584,6 +584,11 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
                 session,
             )
 
+            # ── 兜底：如果 LLM 没有调用 send_feishu，手动发送批改结果 ──
+            if result and isinstance(result, str) and len(result) > 50 and "OK" not in result[:10]:
+                _log(f"[QUEUE] LLM 未调用 send_feishu，手动发送批改结果 (len={len(result)})")
+                send_feishu(receive_id=reply_target, msg_type="text", content=result)
+
             # ── 更新任务状态 ──
             q2 = _load_learning_queue()
             all_correct = False

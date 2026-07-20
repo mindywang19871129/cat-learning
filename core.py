@@ -479,17 +479,20 @@ def ocr_image(image_path: str) -> str:
 VISION_APIS = []
 
 # 1. 豆包视觉（Doubao-1.5-Vision-Pro，手写识别强，同Key无需额外付费）
+# ⚠️ coding plan 不支持视觉模型，自动跳过
 DOUBAO_VISION_API_KEY = os.environ.get("DOUBAO_VISION_API_KEY", API_KEY)
 DOUBAO_VISION_MODEL = os.environ.get("DOUBAO_VISION_MODEL", "doubao-1.5-vision-pro-32k")
-# 检测是否使用了火山引擎 API（Key 格式为 uuid 非 sk- 开头）
 _is_volc_key = bool(DOUBAO_VISION_API_KEY and not DOUBAO_VISION_API_KEY.startswith("sk-"))
-if _is_volc_key:
+_is_coding_plan = "coding" in BASE_URL
+if _is_volc_key and not _is_coding_plan:
     VISION_APIS.append({
         "name": "doubao_vision",
         "base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "api_key": DOUBAO_VISION_API_KEY,
         "model": DOUBAO_VISION_MODEL,
     })
+elif _is_volc_key and _is_coding_plan:
+    print("[OCR-VISION] coding plan 不支持视觉模型，跳过 Doubao Vision，直接使用飞书 OCR")
 
 # 2. 硅基流动（已有余额时使用，Qwen3-VL手写识别强）
 SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "")
