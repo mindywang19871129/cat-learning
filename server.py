@@ -390,9 +390,11 @@ def _push_task_to_feishu(task: dict, reply_target: str):
         
         lines.append("")
         if task_type in ("geometry", "geometry_preview"):
-            lines.append("⚠️ 几何题配有图形，请查看飞书消息中的图片。")
-        if task_type == "ket_writing":
+            lines.append("📐 本题为选择题，请直接回复字母答案，如「A」「B」「1A 2C」，无需拍照。")
+        elif task_type == "ket_writing":
             lines.append("请在纸上写下作文，拍照后直接发给我。")
+        elif task_type in ("vocab", "ket_vocab", "grammar", "ket_grammar", "ket_reading"):
+            lines.append("可直接回复字母答案（如「1A 2B 3C」），或在纸上写答案后拍照。")
         else:
             lines.append("请在纸上写下答案，拍照后直接发给我。")
         lines.append("发完所有图片后回复「提交」开始批改。")
