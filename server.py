@@ -571,22 +571,21 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
                 f"试卷题目和标准答案：\n{qs_summary}\n\n"
                 f"{grading_hints}"
                 f"{auto_hint}"
-                f"请逐题批改（✅/❌ + 解析），更新mastery/error_book。\n\n"
-                f"⚠️ 自适应难度规则（root.md第9节）：\n"
-                f"- 如果基础题错了（score<50的知识点）→ 批改结果最后必须加上一行：\n"
-                f"  [NEEDS_REVIEW:{task_topic}]\n"
-                f"- 如果有1道以上错题 → 加一行：[ERROR_COUNT:{{错误的题数}}]\n"
-                f"- 如果全部答对 → 加一行：[ALL_CORRECT]\n\n"
+                f"请逐题批改（✅/❌ + 解析）。\n\n"
+                f"⚠️ ⚠️ ⚠️ 关键规则：\n"
+                f"1. 批改前先修正OCR明显误识别（如3O°→30°、9O°→90°、Zl→21、S→5）\n"
+                f"2. 如果修正后答案正确 → 判✅，不加错误标记\n"
+                f"3. 修正后仍有错题 → 在结果末尾加一行：[ERROR_COUNT:{{错误题数}}]\n"
+                f"4. ⚠️ 不要更新mastery/error_book！不要调用update_mastery！\n"
+                f"5. 如果全部答对 → 加一行：[ALL_CORRECT]\n\n"
                 f"然后用 send_feishu(receive_id=\"{reply_target}\") 发送批改结果。\n"
                 f"如果全对，在消息末尾自然地提示已自动进入下一项，不用写「回复继续」。\n"
-                f"如果有错题，在消息末尾写「回复「继续」做下一项，回复「任务清单」查看进度🐱」",
+                f"如果有错题，在消息末尾写「如有OCR识别错误，回复「重新检查」；确认无误回复「继续」做下一项🐱」",
                 session,
             )
 
             # ── 更新任务状态 ──
             q2 = _load_learning_queue()
-            need_review = False
-            review_topic = ""
             all_correct = False
             for t in q2.get("queue", []):
                 if t["task_id"] == task["task_id"]:
@@ -595,15 +594,6 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
                     # 保留图片路径供重新批改使用
                     break
             
-            # ── 自适应难度：检测是否需要基础复习（仅非复习任务触发）──
-            if result and "[NEEDS_REVIEW:" in result and task.get("type") != "review":
-                import re
-                m = re.search(r'\[NEEDS_REVIEW:([^\]]+)\]', str(result))
-                if m:
-                    review_topic = m.group(1).strip() or "基础概念"
-                    need_review = True
-                    _log(f"[ADAPTIVE] 检测到基础概念薄弱，需要复习: {review_topic}")
-
             # ── 检测全对，自动推下一个任务 ──
             if result and "[ALL_CORRECT]" in str(result):
                 all_correct = True
@@ -635,67 +625,7 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
                     send_feishu(receive_id=reply_target, msg_type="text",
                                content="🐱 所有任务都完成啦！今天表现太棒了！🎉")
 
-            # ── 自动生成基础复习任务 ──
-            if need_review and review_topic:
-                _log(f"[ADAPTIVE] 生成基础复习任务: {review_topic}")
-                review_session = init_new_session()
-                review_test_id = _gen_test_id('R')
-                review_file = str(DATA_DIR / "questions" / f"review_{review_test_id}.json")
-                review_result = run(
-                    f"请为学生生成一个基础概念复习任务。\n\n"
-                    f"═══════════════════════════════════════\n"
-                    f"第零步：生成编号\n"
-                    f"═══════════════════════════════════════\n"
-                    f"test_id = \"{review_test_id}\"\n"
-                    f"每道题用 _gen_question_id() 生成全局唯一编号\n\n"
-                    f"═══════════════════════════════════════\n"
-                    f"复习主题：{review_topic}\n"
-                    f"═══════════════════════════════════════\n\n"
-                    f"⚠️ 学生在基础题上犯了错误。请执行：\n"
-                    f"1. 先阅读 data/mastery.json，找到 score<50 的知识点\n"
-                    f"2. 用最简单易懂的方式讲解该基础概念（用生活例子，像老师在讲新课一样）\n"
-                    f"3. 出 3 道基础级别的练习题（比原来的题目更简单）\n"
-                    f"4. 每道题给出详细解题步骤\n\n"
-                    f"═══════════════════════════════════════\n"
-                    f"存储\n"
-                    f"═══════════════════════════════════════\n"
-                    f"用 write_file 存入 {review_file}\n"
-                    f"格式：{{\"test_id\":\"{review_test_id}\",\"date\":\"{datetime.now().strftime('%Y-%m-%d')}\",\"type\":\"review\",\"topic\":\"{review_topic}\","
-                    f"\"introduction\":\"概念讲解内容\",\"questions\":[{{id,question,answer,hint}}]}}\n\n"
-                    "⚠️ 注意：只存储，不要调用 send_feishu 推送！系统会自动从学习队列推送。",
-                    review_session,
-                )
-                # 插入复习任务到队列下一个位置
-                q3 = _load_learning_queue()
-                pending_idx = None
-                for i, t in enumerate(q3.get("queue", [])):
-                    if t.get("status") in ("pending", "in_progress", "image_received"):
-                        pending_idx = i
-                        break
-                review_task = {
-                    "task_id": review_test_id,
-                    "date": datetime.now().strftime("%Y-%m-%d"),
-                    "type": "review",
-                    "title": f"🔄 {review_topic}·基础复习",
-                    "status": "pending",
-                    "priority": 0,  # 最高优先级，插到最前面
-                    "questions_file": review_file,
-                    "difficulty": "basic",
-                    "image_paths": [],
-                    "submitted_at": None,
-                    "graded_at": None,
-                }
-                # 去重：不插入已存在的任务ID
-                existing_ids = {t["task_id"] for t in q3.get("queue", [])}
-                if review_test_id not in existing_ids:
-                    if pending_idx is not None:
-                        q3["queue"].insert(pending_idx, review_task)
-                    else:
-                        q3.setdefault("queue", []).append(review_task)
-                _save_learning_queue(q3)
-                _log(f"[ADAPTIVE] 基础复习任务 {review_test_id} 已插入队列")
-                send_feishu(receive_id=reply_target, msg_type="text",
-                           content=f"🐱 我注意到有些基础概念还不太熟，已经帮你插入了「{review_topic}·基础复习」任务。\n回复「继续」先复习巩固一下，再往下做～")
+            # ⚠️ 不再自动生成基础复习任务 — 学生确认错题后才生成（见 _grade_task_recheck）
 
         except Exception as e:
             _log(f"[QUEUE] 批改异常: {e}")
@@ -781,12 +711,20 @@ def _grade_task_recheck(sender_id: str, chat_id: str, reply_target: str, task: d
             f"2. ⚠️ 有余数除法：注意商和余数的数字是否正确\n"
             f"3. 对比标准答案格式，判断OCR结果是否合理\n"
             f"4. 逐题重新批改（✅/❌ + 解析）\n"
-            f"5. 更新mastery/error_book\n"
-            f"6. 用 send_feishu(receive_id=\"{reply_target}\") 发送重新批改结果\n"
+            f"5. ⚠️ 确认确实错了的题，更新mastery/error_book\n"
+            f"6. 如果有错题 → 在末尾加一行：[ERROR_COUNT:{{错误题数}}]\n"
+            f"7. 如果全部答对 → 在末尾加一行：[ALL_CORRECT]\n"
+            f"8. 用 send_feishu(receive_id=\"{reply_target}\") 发送重新批改结果\n"
             f"⚠️ 必须调用send_feishu！",
             session,
         )
         _log(f"[RECHECK] 重新批改完成: {task['task_id']}")
+
+        # ── 重新检查后，确认错题，更新mastery/error_book ──
+        if result and "[ERROR_COUNT:" in str(result):
+            _log(f"[RECHECK] 确认有错题，已由LLM更新mastery/error_book")
+        elif result and "[ALL_CORRECT]" in str(result):
+            _log(f"[RECHECK] 重新检查后全部正确，之前是OCR误判")
     except Exception as e:
         _log(f"[RECHECK] 重新批改异常: {e}")
         send_feishu(receive_id=reply_target, msg_type="text",
