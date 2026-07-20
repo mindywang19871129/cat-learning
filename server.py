@@ -1955,12 +1955,16 @@ def scheduled_pre_generate():
         run(prompt, session)
         _log(f"[SCHEDULER] 预生成：LLM 出题完成")
 
-        # 加入队列
+        # ── 校验文件是否存在，缺失的跳过 ──
         for task_cfg in sorted(tasks_cfg, key=lambda t: t.get("priority", 99)):
             ttype = task_cfg["type"]
             test_id = test_ids.get(ttype, "")
             output_file = task_cfg.get("output_file", "").replace("{today_str}", today_str)
-            _add_task_to_queue(test_id, today_str, ttype, str(DATA_DIR / output_file.replace("data/", "")))
+            question_path = DATA_DIR / output_file.replace("data/", "")
+            if not question_path.exists():
+                _log(f"[SCHEDULER] ⚠️ 预生成文件缺失，跳过: {ttype} ({question_path})")
+                continue
+            _add_task_to_queue(test_id, today_str, ttype, str(question_path))
 
         # 恢复 send_feishu
         if _saved_send_feishu:
@@ -2068,12 +2072,21 @@ def scheduled_daily_push(is_manual: bool = False):
         run(prompt, session)
         _log(f"[SCHEDULER] LLM 出题完成")
 
-        # 全部加入队列
+        # ── 校验生成的文件是否都存在，缺失的跳过不入队列 ──
+        added_count = 0
+        skipped_count = 0
         for task_cfg in sorted(tasks_cfg, key=lambda t: t.get("priority", 99)):
             ttype = task_cfg["type"]
             test_id = test_ids.get(ttype, "")
             output_file = task_cfg.get("output_file", "").replace("{today_str}", today_str)
-            _add_task_to_queue(test_id, today_str, ttype, str(DATA_DIR / output_file.replace("data/", "")))
+            question_path = DATA_DIR / output_file.replace("data/", "")
+            if not question_path.exists():
+                _log(f"[SCHEDULER] ⚠️ 文件缺失，跳过: {ttype} ({question_path})")
+                skipped_count += 1
+                continue
+            _add_task_to_queue(test_id, today_str, ttype, str(question_path))
+            added_count += 1
+        _log(f"[SCHEDULER] 队列同步完成: {added_count} 个入队, {skipped_count} 个跳过")
 
         # 恢复 send_feishu 工具
         if _saved_send_feishu:
