@@ -493,25 +493,48 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
 
             ocr_text = "\n---\n".join(all_ocr)
 
-            # ── OCR结果校验：仅检查格式合理性，不比对标准答案（学生可能真的答错了）──
+            # ── 提前获取任务类型（OCR校验和批改提示都需要）──
+            task_type_hint = task.get("type", "")
+
+            # ── OCR结果校验：根据任务类型使用不同的校验策略 ──
             if ocr_text and qs:
                 try:
-                    validate_prompt = (
-                        "你是OCR手写数字识别校验专家。请修正OCR的识别错误。\n\n"
-                        "⚠️ 铁则：学生可能真的答错了，所以不能把OCR结果改成标准答案！\n"
-                        "你只能修正OCR技术层面的识别错误。\n\n"
-                        "常见数字混淆（必须修正）：\n"
-                        "- 数字：0↔O, 1↔l↔I, 2↔Z, 5↔S, 6↔G, 7↔1, 8↔B, 9↔g, 4↔9\n"
-                        "- 运算符：×↔x, ÷↔+, =↔-\n"
-                        "- 有余数除法：注意识别\"余\"字和余数数字\n\n"
-                        "输出格式（逐题，每行一个）：\n"
-                        "题号|修正后的答案\n\n"
-                        "⚠️ 重要：每道题都必须输出修正后的数字/表达式，不要输出'保留'或'不确定'等中文！\n"
-                        "如果OCR结果看起来是合理的数字（如'47'、'258'），直接输出该数字。\n"
-                        "如果明显是识别错误（如'Zl'→'21'），修正后输出正确数字。\n\n"
-                        f"原始OCR结果：\n{ocr_text}\n\n"
-                        "请逐题输出修正后的答案："
-                    )
+                    # 英语类任务：识别字母 A/B/C/D/True/False
+                    if task_type_hint in ("vocab", "ket_vocab", "grammar", "ket_grammar", "ket_reading", "writing", "ket_writing"):
+                        validate_prompt = (
+                            "你是OCR手写字母识别专家。请修正OCR的识别错误。\n\n"
+                            "⚠️ 铁则：学生可能真的答错了，所以不能把OCR结果改成标准答案！\n"
+                            "你只能修正OCR技术层面的识别错误。\n\n"
+                            "这是英语选择题（A/B/C/D），常见OCR混淆（必须修正）：\n"
+                            "- B→8, B→13, A→4, C→0, D→0, D→O\n"
+                            "- 常见误识别：B被OCR成8→修正为B, A被OCR成4→修正为A, C被OCR成0→修正为C\n"
+                            "- 数字→字母映射：4→A, 8→B, 0→C或D, 1→A\n\n"
+                            "输出格式（逐题，每行一个）：\n"
+                            "题号|修正后的答案\n\n"
+                            "示例：\n"
+                            "1|B\n"
+                            "2|A\n"
+                            "3|C\n\n"
+                            f"原始OCR结果：\n{ocr_text}\n\n"
+                            "请逐题输出修正后的字母答案："
+                        )
+                    else:
+                        validate_prompt = (
+                            "你是OCR手写数字识别校验专家。请修正OCR的识别错误。\n\n"
+                            "⚠️ 铁则：学生可能真的答错了，所以不能把OCR结果改成标准答案！\n"
+                            "你只能修正OCR技术层面的识别错误。\n\n"
+                            "常见数字混淆（必须修正）：\n"
+                            "- 数字：0↔O, 1↔l↔I, 2↔Z, 5↔S, 6↔G, 7↔1, 8↔B, 9↔g, 4↔9\n"
+                            "- 运算符：×↔x, ÷↔+, =↔-\n"
+                            "- 有余数除法：注意识别\"余\"字和余数数字\n\n"
+                            "输出格式（逐题，每行一个）：\n"
+                            "题号|修正后的答案\n\n"
+                            "⚠️ 重要：每道题都必须输出修正后的数字/表达式，不要输出'保留'或'不确定'等中文！\n"
+                            "如果OCR结果看起来是合理的数字（如'47'、'258'），直接输出该数字。\n"
+                            "如果明显是识别错误（如'Zl'→'21'），修正后输出正确数字。\n\n"
+                            f"原始OCR结果：\n{ocr_text}\n\n"
+                            "请逐题输出修正后的答案："
+                        )
                     validated = call_llm(validate_prompt)
                     if validated and len(validated) > 3 and "|" in validated:
                         _log(f"[OCR-VALIDATE] 校验修正: {validated[:100]}")
@@ -520,7 +543,6 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
                     _log(f"[OCR-VALIDATE] 校验失败: {e}")
 
             auto_hint = "\n⚠️ 这是系统自动提交的（学生超时未手动提交），请在批改结果开头说明。\n" if is_auto else ""
-            task_type_hint = task.get("type", "")
             task_topic = ""
             if task_type_hint == "calc": task_topic = "计算"
             elif task_type_hint == "math": task_topic = "数学"
