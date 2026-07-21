@@ -496,48 +496,59 @@ def _submit_active_task(sender_id: str, chat_id: str, reply_target: str, is_auto
             # ── 提前获取任务类型（OCR校验和批改提示都需要）──
             task_type_hint = task.get("type", "")
 
-            # ── OCR结果校验：根据任务类型使用不同的校验策略 ──
+            # ── OCR结果校验：根据标准答案格式自动判断每道题的答案类型 ──
             if ocr_text and qs:
                 try:
-                    # 英语类任务：识别字母 A/B/C/D/True/False
-                    if task_type_hint in ("vocab", "ket_vocab", "grammar", "ket_grammar", "ket_reading", "writing", "ket_writing"):
-                        validate_prompt = (
-                            "你是OCR手写字母识别专家。请修正OCR的识别错误。\n\n"
-                            "⚠️ 铁则：学生可能真的答错了，所以不能把OCR结果改成标准答案！\n"
-                            "你只能修正OCR技术层面的识别错误。\n\n"
-                            "这是英语选择题（A/B/C/D），常见OCR混淆（必须修正）：\n"
-                            "- B→8, B→13, A→4, C→0, D→0, D→O\n"
-                            "- 常见误识别：B被OCR成8→修正为B, A被OCR成4→修正为A, C被OCR成0→修正为C\n"
-                            "- 数字→字母映射：4→A, 8→B, 0→C或D, 1→A\n\n"
-                            "输出格式（逐题，每行一个）：\n"
-                            "题号|修正后的答案\n\n"
-                            "示例：\n"
-                            "1|B\n"
-                            "2|A\n"
-                            "3|C\n\n"
-                            f"原始OCR结果：\n{ocr_text}\n\n"
-                            "请逐题输出修正后的字母答案："
-                        )
-                    else:
-                        validate_prompt = (
-                            "你是OCR手写数字识别校验专家。请修正OCR的识别错误。\n\n"
-                            "⚠️ 铁则：学生可能真的答错了，所以不能把OCR结果改成标准答案！\n"
-                            "你只能修正OCR技术层面的识别错误。\n\n"
-                            "常见数字混淆（必须修正）：\n"
-                            "- 数字：0↔O, 1↔l↔I, 2↔Z, 5↔S, 6↔G, 7↔1, 8↔B, 9↔g, 4↔9\n"
-                            "- 运算符：×↔x, ÷↔+, =↔-\n"
-                            "- 有余数除法：注意识别\"余\"字和余数数字\n\n"
-                            "输出格式（逐题，每行一个）：\n"
-                            "题号|修正后的答案\n\n"
-                            "⚠️ 重要：每道题都必须输出修正后的数字/表达式，不要输出'保留'或'不确定'等中文！\n"
-                            "如果OCR结果看起来是合理的数字（如'47'、'258'），直接输出该数字。\n"
-                            "如果明显是识别错误（如'Zl'→'21'），修正后输出正确数字。\n\n"
-                            f"原始OCR结果：\n{ocr_text}\n\n"
-                            "请逐题输出修正后的答案："
-                        )
-                    validated = call_llm(validate_prompt)
+                    # 构建格式提示：只告诉LLM该题是字母/数字/文本，不泄露标准答案值
+                    format_lines = []
+                    for q in qs:
+                        qid = q.get("id", "")
+                        answer = str(q.get("answer", "")).strip()
+                        ans_upper = answer.upper()
+                        if ans_upper in ("A", "B", "C", "D", "E", "F", "TRUE", "FALSE", "YES", "NO", "T", "F"):
+                            fmt = "L"  # 字母/判断
+                        elif any(c.isdigit() for c in answer):
+                            fmt = "N"  # 数字/算式
+                        else:
+                            fmt = "T"  # 文本/单词
+                        format_lines.append(f"{qid}|{fmt}")
+
+                    answer_formats = "\n".join(format_lines)
+
+                    validate_prompt = (
+                        "你是OCR手写识别校验专家。请修正OCR的识别错误。\n\n"
+                        "⚠️ 铁则：学生可能真的答错了，不能把OCR结果改成标准答案！你只能修正OCR技术层面的识别错误。\n\n"
+                        "每道题的答案格式代码（仅用于判断答案类型，不是标准答案值）：\n"
+                        f"{answer_formats}\n"
+                        "格式代码：L=字母/判断（A/B/C/D/True/False）, N=数字/算式, T=文本/单词\n\n"
+                        "常见OCR混淆速查（按答案格式判断该用哪种修正）：\n"
+                        "【字母↔数字】A↔4, B↔8/13, C↔0/6, D↔0/O, E↔3, F↔7, G↔6\n"
+                        "【数字↔字母】0↔O/D, 1↔l/I, 2↔Z, 3↔E, 4↔9, 5↔S, 6↔G, 7↔1/T, 8↔B, 9↔g\n"
+                        "【符号混淆】×↔x, ÷↔+, =↔-  （手写÷常被OCR认成+，×认成x）\n\n"
+                        "修正规则：\n"
+                        "- L类题：OCR可能把字母识别成数字，如B→8→修正为B, A→4→修正为A, C→0→修正为C\n"
+                        "- N类题：OCR可能把数字识别成字母，如l→1, O→0, Z→2；但如果OCR结果已是合理数字（如47），保留\n"
+                        "- T类题：只修正明显字符混淆，保留拼写\n"
+                        "- 同一个数字在不同格式题中含义不同：OCR看到'8'→L类修正为B，N类保留为8\n\n"
+                        "输出格式：逐题一行，格式 题号|修正后答案\n"
+                        "示例：1|B    2|47    3|True    4|apple\n\n"
+                        f"原始OCR结果：\n{ocr_text}\n\n"
+                        "请逐题输出修正后的答案："
+                    )
+                    validated = call_llm(validate_prompt, max_tokens=2000)
                     if validated and len(validated) > 3 and "|" in validated:
-                        _log(f"[OCR-VALIDATE] 校验修正: {validated[:100]}")
+                        _log(f"[OCR-VALIDATE] 校验修正: {validated[:200]}")
+                        # 准确性核查：对比标准答案格式，记录可疑修正
+                        for line in validated.strip().split("\n"):
+                            parts = line.split("|")
+                            if len(parts) >= 2:
+                                vid, vans = parts[0].strip(), parts[1].strip()
+                                for q in qs:
+                                    if str(q.get("id", "")) == vid:
+                                        std_ans = str(q.get("answer", "")).strip()
+                                        if vans.upper() == std_ans.upper():
+                                            _log(f"[OCR-VALIDATE] ⚠️ 题{vid}: 修正后'{vans}'匹配标准答案，需人工确认非过度修正")
+                                        break
                         ocr_text = validated
                 except Exception as e:
                     _log(f"[OCR-VALIDATE] 校验失败: {e}")
@@ -723,27 +734,56 @@ def _grade_task_recheck(sender_id: str, chat_id: str, reply_target: str, task: d
 
         ocr_text = "\n---\n".join(all_ocr)
 
-        # 更严格的OCR校验
+        # 统一OCR校验：根据标准答案格式自动判断每道题类型
         try:
+            format_lines = []
+            for q in qs:
+                qid = q.get("id", "")
+                answer = str(q.get("answer", "")).strip()
+                ans_upper = answer.upper()
+                if ans_upper in ("A", "B", "C", "D", "E", "F", "TRUE", "FALSE", "YES", "NO", "T", "F"):
+                    fmt = "L"
+                elif any(c.isdigit() for c in answer):
+                    fmt = "N"
+                else:
+                    fmt = "T"
+                format_lines.append(f"{qid}|{fmt}")
+
+            answer_formats = "\n".join(format_lines)
+
             validate_prompt = (
-                "你是OCR手写数字识别校验专家。请修正OCR的识别错误。\n\n"
-                "⚠️ 铁则：学生可能真的答错了，所以不能把OCR结果改成标准答案！\n"
-                "你只能修正OCR技术层面的识别错误。\n\n"
-                "常见数字混淆（必须修正）：\n"
-                "- 数字：0↔O, 1↔l↔I, 2↔Z, 5↔S, 6↔G, 7↔1, 8↔B, 9↔g, 4↔9\n"
-                "- 运算符：×↔x, ÷↔+, =↔-\n"
-                "- 有余数除法：注意识别\"余\"字和余数数字\n\n"
-                "输出格式（逐题，每行一个）：\n"
-                "题号|修正后的答案\n\n"
-                "⚠️ 重要：每道题都必须输出修正后的数字/表达式，不要输出'保留'或'不确定'等中文！\n"
-                "如果OCR结果看起来是合理的数字（如'47'、'258'），直接输出该数字。\n"
-                "如果明显是识别错误（如'Zl'→'21'），修正后输出正确数字。\n\n"
+                "你是OCR手写识别校验专家。请修正OCR的识别错误。\n\n"
+                "⚠️ 铁则：学生可能真的答错了，不能把OCR结果改成标准答案！你只能修正OCR技术层面的识别错误。\n\n"
+                "每道题的答案格式代码（仅用于判断答案类型，不是标准答案值）：\n"
+                f"{answer_formats}\n"
+                "格式代码：L=字母/判断（A/B/C/D/True/False）, N=数字/算式, T=文本/单词\n\n"
+                "常见OCR混淆速查（按答案格式判断该用哪种修正）：\n"
+                "【字母↔数字】A↔4, B↔8/13, C↔0/6, D↔0/O, E↔3, F↔7, G↔6\n"
+                "【数字↔字母】0↔O/D, 1↔l/I, 2↔Z, 3↔E, 4↔9, 5↔S, 6↔G, 7↔1/T, 8↔B, 9↔g\n"
+                "【符号混淆】×↔x, ÷↔+, =↔-  （手写÷常被OCR认成+，×认成x）\n\n"
+                "修正规则：\n"
+                "- L类题：OCR可能把字母识别成数字，如B→8→修正为B, A→4→修正为A, C→0→修正为C\n"
+                "- N类题：OCR可能把数字识别成字母，如l→1, O→0, Z→2；但如果OCR结果已是合理数字（如47），保留\n"
+                "- T类题：只修正明显字符混淆，保留拼写\n"
+                "- 同一个数字在不同格式题中含义不同：OCR看到'8'→L类修正为B，N类保留为8\n\n"
+                "输出格式：逐题一行，格式 题号|修正后答案\n"
+                "示例：1|B    2|47    3|True    4|apple\n\n"
                 f"原始OCR结果：\n{ocr_text}\n\n"
                 "请逐题输出修正后的答案："
             )
-            validated = call_llm(validate_prompt)
+            validated = call_llm(validate_prompt, max_tokens=2000)
             if validated and len(validated) > 3 and "|" in validated:
-                _log(f"[RECHECK] OCR校验修正: {validated[:100]}")
+                _log(f"[RECHECK] OCR校验修正: {validated[:200]}")
+                for line in validated.strip().split("\n"):
+                    parts = line.split("|")
+                    if len(parts) >= 2:
+                        vid, vans = parts[0].strip(), parts[1].strip()
+                        for q in qs:
+                            if str(q.get("id", "")) == vid:
+                                std_ans = str(q.get("answer", "")).strip()
+                                if vans.upper() == std_ans.upper():
+                                    _log(f"[RECHECK] ⚠️ 题{vid}: 修正后'{vans}'匹配标准答案，需人工确认非过度修正")
+                                break
                 ocr_text = validated
         except Exception as e:
             _log(f"[RECHECK] OCR校验失败: {e}")
