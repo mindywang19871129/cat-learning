@@ -232,6 +232,27 @@ def call_llm(prompt: str, system: str = "", max_retries: int = 3) -> str:
             raise
 
 
+def check_llm_quota() -> dict:
+    """检测LLM API配额状态（用最小请求，仅消耗1 token）。
+    返回: {"status": "ok"|"exhausted"|"error", "detail": str}"""
+    try:
+        resp = CLIENT.chat.completions.create(
+            model=MODEL,  # 用flash模型省token
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=1,
+            stream=False,
+        )
+        return {"status": "ok", "detail": f"LLM API正常, model={MODEL}"}
+    except Exception as e:
+        err_str = str(e)
+        if "429" in err_str or "quota" in err_str.lower() or "exceeded" in err_str.lower():
+            return {"status": "exhausted", "detail": err_str[:300]}
+        elif "402" in err_str or "insufficient" in err_str.lower() or "balance" in err_str.lower():
+            return {"status": "exhausted", "detail": err_str[:300]}
+        else:
+            return {"status": "error", "detail": err_str[:300]}
+
+
 # ─── 工具 8：联网搜索 ───────────────────────────────────────────────
 
 def web_search(query: str, max_results: int = 5) -> str:

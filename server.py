@@ -25,7 +25,7 @@ from core import (
     init_new_session, run, download_feishu_image,
     download_feishu_file, extract_text_from_pdf,
     ocr_image, enhanced_ocr_image, send_feishu, find_questions,
-    call_llm, verify_password, DATA_DIR, CFG, HOME as CORE_HOME, Session
+    call_llm, check_llm_quota, verify_password, DATA_DIR, CFG, HOME as CORE_HOME, Session
 )
 import core as _core_mod
 
@@ -1991,6 +1991,9 @@ def scheduled_pre_generate():
         _log("[SCHEDULER] ⛔ 预生成：已有推送任务正在执行，跳过")
         return
     try:
+        if _check_quota_block_push():
+            _log("[SCHEDULER] 预生成：配额异常，取消")
+            return
         q = _load_learning_queue()
         pending = [t for t in q.get("queue", []) if t.get("status") in ("pending", "in_progress", "image_received", "submitted")]
         if pending:
@@ -2086,6 +2089,9 @@ def scheduled_daily_push(is_manual: bool = False):
     _saved_send_feishu = None
     _saved_schema = None
     try:
+        if not is_manual and _check_quota_block_push():
+            _log("[SCHEDULER] 每日推送：配额异常，取消（手动触发不受影响）")
+            return
         _log(f"[SCHEDULER] ====== 开始执行每日推送 (manual={is_manual}) ======")
         _log(f"[SCHEDULER] 时间: {datetime.now()}")
 
@@ -2368,6 +2374,54 @@ def scheduled_image_cleanup():
         _log(f"[CLEANUP] 无需清理的图片")
 
 
+_QUOTA_CHECK_LOCK = threading.Lock()
+_LAST_QUOTA_ALERT = {"time": None}  # 避免重复告警刷屏
+
+def scheduled_quota_check():
+    """定期检测LLM配额，低配额时飞书通知用户。每2小时执行一次。"""
+    with _QUOTA_CHECK_LOCK:
+        result = check_llm_quota()
+        status = result["status"]
+        detail = result.get("detail", "")[:200]
+        _log(f"[QUOTA-CHECK] 状态: {status}, 详情: {detail}")
+
+        if status == "exhausted":
+            # 防止重复告警：4小时内只发一次
+            last = _LAST_QUOTA_ALERT.get("time")
+            now = time.time()
+            if last and (now - last) < 14400:
+                _log("[QUOTA-CHECK] 配额耗尽，但4小时内已告警过，跳过")
+                return
+            _LAST_QUOTA_ALERT["time"] = now
+
+            poll_cfg = CFG.get("feishu", {}).get("poll", {})
+            for chat_id in poll_cfg.get("chat_ids", []):
+                try:
+                    send_feishu(receive_id=chat_id, msg_type="text",
+                               content=f"🐱 LLM API 配额告警！\n\n"
+                                       f"状态：配额耗尽\n"
+                                       f"详情：{detail}\n\n"
+                                       f"请尽快续费火山引擎 API，否则出题和批改都会受影响哦～")
+                except Exception as e:
+                    _log(f"[QUOTA-CHECK] 飞书通知失败: {e}")
+
+
+def _check_quota_block_push() -> bool:
+    """推送/出题前检查配额。返回True表示配额异常、应阻止操作。"""
+    result = check_llm_quota()
+    if result["status"] == "exhausted":
+        _log(f"[QUOTA-BLOCK] 配额耗尽，阻止操作: {result.get('detail','')[:100]}")
+        poll_cfg = CFG.get("feishu", {}).get("poll", {})
+        for chat_id in poll_cfg.get("chat_ids", []):
+            try:
+                send_feishu(receive_id=chat_id, msg_type="text",
+                           content=f"🐱 今日出题失败：LLM API 配额不足，请先续费火山引擎 API 哦～")
+            except:
+                pass
+        return True
+    return False
+
+
 def start_scheduler():
     push_time = CFG.get("education", {}).get("push_time", "09:00")
     hour, minute = map(int, push_time.split(":"))
@@ -2385,6 +2439,9 @@ def start_scheduler():
     # 每日凌晨3点清理超过1天的图片
     scheduler.add_job(scheduled_image_cleanup, 'cron', hour=3, minute=0, id='image_cleanup')
     
+    # LLM配额检测：每2小时检查一次，配额异常时飞书通知用户续费
+    scheduler.add_job(scheduled_quota_check, 'interval', hours=2, id='quota_check')
+    
     # 自动提交扫描：每60秒检查一次超时未提交的图片上传
     scheduler.add_job(scheduled_auto_submit_uploads, 'interval', seconds=_AUTO_SUBMIT_SCAN_INTERVAL, id='auto_submit_scan')
     
@@ -2396,7 +2453,7 @@ def start_scheduler():
         print(f"[POLL] 飞书消息轮询已启动，间隔 {interval}s，监控 {len(poll_cfg['chat_ids'])} 个聊天")
     
     scheduler.start()
-    print(f"[SCHEDULER] 已启动，05:00预生成 + 每日 {push_time} 推送 + 周日综合测试 + 图片清理")
+    print(f"[SCHEDULER] 已启动，05:00预生成 + 每日 {push_time} 推送 + 周日综合测试 + 配额检测(2h) + 图片清理")
 
 
 # ══════════════════════════════════════════════════════════════════════
